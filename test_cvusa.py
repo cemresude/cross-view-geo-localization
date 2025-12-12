@@ -18,6 +18,8 @@ import scipy.io
 import yaml
 import math
 from model import ft_net, two_view_net, three_view_net
+from model_rgbd import two_view_net_rgbd
+from dataset_rgbd import RGBDSatelliteDataset
 from utils import load_network
 
 #fp16
@@ -44,6 +46,8 @@ parser.add_argument('--PCB', action='store_true', help='use PCB' )
 parser.add_argument('--multi', action='store_true', help='use multiple query' )
 parser.add_argument('--fp16', action='store_true', help='use fp16.' )
 parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,1.1  1,1.1,1.2')
+parser.add_argument('--use_rgbd', action='store_true', help='use RGBD (4-channel) for satellite images')
+parser.add_argument('--depth_dir',default='./data/cvpr2017_cvusa_depth/val',type=str, help='depth map directory')
 
 opt = parser.parse_args()
 ###load config###
@@ -65,7 +69,11 @@ if 'h' in config:
 if 'nclasses' in config: # tp compatible with old config files
     opt.nclasses = config['nclasses']
 else: 
-    opt.nclasses = 729 
+    opt.nclasses = 729
+
+# RGBD configuration
+if 'use_rgbd' in config:
+    opt.use_rgbd = config['use_rgbd'] 
 
 str_ids = opt.gpu_ids.split(',')
 #which_epoch = opt.which_epoch
@@ -120,9 +128,43 @@ if opt.multi:
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
-    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['query_satellite', 'gallery_drone']}
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['query_satellite','gallery_drone']}
+    # RGBD mode için özel dataset
+    if opt.use_rgbd:
+        # Satellite için RGBD dataset
+        satellite_dataset = RGBDSatelliteDataset(
+            os.path.join(data_dir, 'query_satellite'),
+            os.path.join(opt.depth_dir, 'query_satellite'),
+            transform=data_transforms
+        )
+        # Drone için normal RGB dataset
+        drone_dataset = datasets.ImageFolder(
+            os.path.join(data_dir, 'gallery_drone'),
+            data_transforms
+        )
+        
+        image_datasets = {
+            'query_satellite': satellite_dataset,
+            'gallery_drone': drone_dataset
+        }
+        dataloaders = {
+            'query_satellite': torch.utils.data.DataLoader(
+                satellite_dataset, 
+                batch_size=opt.batchsize,
+                shuffle=False, 
+                num_workers=16
+            ),
+            'gallery_drone': torch.utils.data.DataLoader(
+                drone_dataset,
+                batch_size=opt.batchsize,
+                shuffle=False,
+                num_workers=16
+            )
+        }
+    else:
+        # Normal RGB mode
+        image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['query_satellite', 'gallery_drone']}
+        dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
+                                                 shuffle=False, num_workers=16) for x in ['query_satellite','gallery_drone']}
 use_gpu = torch.cuda.is_available()
 
 ######################################################################
@@ -148,7 +190,7 @@ def which_view(name):
         print('unknown view')
     return -1
 
-def extract_feature(model,dataloaders, view_index = 1):
+def extract_feature(model,dataloaders, view_index = 1, use_rgbd=False):
     features = torch.FloatTensor()
     count = 0
     for data in dataloaders:
@@ -156,6 +198,11 @@ def extract_feature(model,dataloaders, view_index = 1):
         n, c, h, w = img.size()
         count += n
         print(count)
+        
+        # RGBD için 4 kanal kontrolü
+        if use_rgbd and view_index == 1:  # satellite view
+            assert c == 4, f"Expected 4 channels for RGBD, got {c}"
+        
         ff = torch.FloatTensor(n,512).zero_().cuda()
 
         for i in range(2):
@@ -228,22 +275,35 @@ which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
 print('%d -> %d:'%(which_query, which_gallery))
 
-gallery_path = image_datasets[gallery_name].imgs
+# RGBD mode için path extraction
+if opt.use_rgbd:
+    # Satellite RGBD dataset için
+    query_samples = image_datasets[query_name].samples
+    query_path_list = [(s[0], 0) for s in query_samples]  # (path, dummy_label)
+    
+    # Drone normal dataset için
+    gallery_path = image_datasets[gallery_name].imgs
+else:
+    gallery_path = image_datasets[gallery_name].imgs
+    query_path_list = image_datasets[query_name].imgs
+
 f = open('gallery_name.txt','w')
 for p in gallery_path:
     f.write(p[0]+'\n')
-query_path = image_datasets[query_name].imgs
+f.close()
+
 f = open('query_name.txt','w')
-for p in query_path:
+for p in query_path_list:
     f.write(p[0]+'\n')
+f.close()
 
 gallery_label, gallery_path  = get_id(gallery_path)
-query_label, query_path  = get_id(query_path)
+query_label, query_path  = get_id(query_path_list)
 
 if __name__ == "__main__":
     with torch.no_grad():
-        query_feature = extract_feature(model,dataloaders[query_name], which_query)
-        gallery_feature = extract_feature(model,dataloaders[gallery_name], which_gallery)
+        query_feature = extract_feature(model,dataloaders[query_name], which_query, use_rgbd=opt.use_rgbd)
+        gallery_feature = extract_feature(model,dataloaders[gallery_name], which_gallery, use_rgbd=False)
 
     # For street-view image, we use the avg feature as the final feature.
     '''

@@ -94,6 +94,16 @@ python test_rgbd.py \
 - `RGBDSatelliteDataset`: RGB + Depth birleştirme
 - `MixedRGBDDataset`: Satellite (RGBD) ve Drone (RGB) için wrapper
 
+### test_cvusa.py (YENİ!)
+- `--use_rgbd`: RGBD modunu aktif eder
+- `--depth_dir`: Depth map klasör yolunu belirtir
+- RGBD satellite ve RGB drone görüntülerini test eder
+
+**Kullanım:**
+```bash
+python test_cvusa.py --name your_model_name --use_rgbd --depth_dir ./data/cvpr2017_cvusa_depth/val
+```
+
 ### MiDaS Entegrasyonu
 ```python
 # Depth map oluşturma
