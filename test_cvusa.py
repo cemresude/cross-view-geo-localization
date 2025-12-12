@@ -86,9 +86,11 @@ for s in str_ms:
     ms.append(math.sqrt(s_f))
 
 # set gpu ids
-if len(gpu_ids)>0:
+if len(gpu_ids)>0 and torch.cuda.is_available():
     torch.cuda.set_device(gpu_ids[0])
     cudnn.benchmark = True
+else:
+    gpu_ids = []  # Force CPU mode if CUDA not available
 
 ######################################################################
 # Load Data
@@ -118,9 +120,9 @@ if opt.multi:
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
-    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['satellite', 'street']}
+    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['query_satellite', 'gallery_drone']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['satellite','street']}
+                                             shuffle=False, num_workers=16) for x in ['query_satellite','gallery_drone']}
 use_gpu = torch.cuda.is_available()
 
 ######################################################################
@@ -219,8 +221,8 @@ since = time.time()
 #gallery_name = 'gallery_street' 
 #query_name = 'query_satellite' 
 
-gallery_name = 'satellite'
-query_name = 'street'
+gallery_name = 'gallery_drone'
+query_name = 'query_satellite'
 
 which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)

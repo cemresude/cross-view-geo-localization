@@ -79,9 +79,11 @@ for str_id in str_ids:
         gpu_ids.append(gid)
 
 # set gpu ids
-if len(gpu_ids)>0:
+if len(gpu_ids)>0 and torch.cuda.is_available():
     torch.cuda.set_device(gpu_ids[0])
     cudnn.benchmark = True
+else:
+    gpu_ids = []  # Force CPU mode if CUDA not available
 ######################################################################
 # Load Data
 # ---------
@@ -137,14 +139,14 @@ if opt.train_all:
 image_datasets = {}
 image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
                                           data_transforms['satellite'])
-image_datasets['street'] = datasets.ImageFolder(os.path.join(data_dir, 'street'),
+image_datasets['drone'] = datasets.ImageFolder(os.path.join(data_dir, 'drone'),
                                           data_transforms['train'])
 
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=True, num_workers=2, pin_memory=True) # 8 workers may work faster
-              for x in ['satellite', 'street']}
-dataset_sizes = {x: len(image_datasets[x]) for x in ['satellite', 'street']}
-class_names = image_datasets['street'].classes
+              for x in ['satellite', 'drone']}
+dataset_sizes = {x: len(image_datasets[x]) for x in ['satellite', 'drone']}
+class_names = image_datasets['drone'].classes
 print(dataset_sizes)
 use_gpu = torch.cuda.is_available()
 
@@ -193,7 +195,7 @@ def train_model(model, model_test, criterion, optimizer, scheduler, num_epochs=2
             running_corrects2 = 0.0
             running_corrects3 = 0.0
             # Iterate over data.
-            for data,data2 in zip(dataloaders['satellite'], dataloaders['street']) :
+            for data,data2 in zip(dataloaders['satellite'], dataloaders['drone']) :
                 # get the inputs
                 inputs, labels = data
                 inputs2, labels2 = data2
@@ -264,7 +266,7 @@ def train_model(model, model_test, criterion, optimizer, scheduler, num_epochs=2
             epoch_acc2 = running_corrects2 / dataset_sizes['satellite']
             
             if opt.views == 2:
-                print('{} Loss: {:.4f} Satellite_Acc: {:.4f}  Street_Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc, epoch_acc2))
+                print('{} Loss: {:.4f} Satellite_Acc: {:.4f}  Drone_Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc, epoch_acc2))
             elif opt.views == 3:
                 epoch_acc3 = running_corrects3 / dataset_sizes['satellite']
                 print('{} Loss: {:.4f} Satellite_Acc: {:.4f}  Street_Acc: {:.4f} Drone_Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc, epoch_acc2, epoch_acc3))
