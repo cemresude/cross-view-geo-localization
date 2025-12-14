@@ -18,6 +18,7 @@ import copy
 import time
 import os
 from model import two_view_net, three_view_net
+from model_rgbd import two_view_net_rgbd
 from random_erasing import RandomErasing
 from autoaugment import ImageNetPolicy
 import yaml
@@ -60,6 +61,7 @@ parser.add_argument('--resume', action='store_true', help='use resume trainning'
 parser.add_argument('--share', action='store_true', help='share weight between different view' )
 parser.add_argument('--extra_Google', action='store_true', help='using extra noise Google' )
 parser.add_argument('--fp16', action='store_true', help='use float16 instead of float32, which will save about 50% memory' )
+parser.add_argument('--use_rgbd', action='store_true', help='use RGBD (4-channel) input for satellite images' )
 opt = parser.parse_args()
 
 if opt.resume:
@@ -137,8 +139,21 @@ if opt.train_all:
      train_all = '_all'
 
 image_datasets = {}
-image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
+
+# RGBD or RGB dataset for satellite
+if opt.use_rgbd:
+    print("🌈 Using RGBD (4-channel) dataset for satellite images")
+    from dataset_rgbd import RGBDSatelliteDataset
+    image_datasets['satellite'] = RGBDSatelliteDataset(
+        rgb_folder=os.path.join(data_dir, 'satellite'),
+        depth_folder=os.path.join(data_dir, 'satellite_depth'),
+        transform=data_transforms['satellite']
+    )
+else:
+    print("🔵 Using RGB (3-channel) dataset for satellite images")
+    image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
                                           data_transforms['satellite'])
+
 image_datasets['drone'] = datasets.ImageFolder(os.path.join(data_dir, 'drone'),
                                           data_transforms['train'])
 
@@ -323,12 +338,24 @@ def draw_curve(current_epoch):
 #
 
 if opt.views == 2:
-    model = two_view_net(len(class_names), droprate = opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share, VGG16=opt.use_vgg16)
+    if opt.use_rgbd:
+        print("🌈 Initializing RGBD two-view model")
+        model = two_view_net_rgbd(len(class_names), droprate = opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share)
+    else:
+        print("🔵 Initializing RGB-only two-view model")
+        model = two_view_net(len(class_names), droprate = opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share, VGG16=opt.use_vgg16)
 elif opt.views == 3:
     model = three_view_net(len(class_names), droprate = opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share, VGG16=opt.use_vgg16)
 
 opt.nclasses = len(class_names)
 
+# Print parameter count
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"\n📊 Model Statistics:")
+print(f"  Total parameters:      {total_params:,}")
+print(f"  Trainable parameters:  {trainable_params:,}")
+print(f"  Model size (MB):       {total_params * 4 / (1024**2):.2f}")
 print(model)
 # For resume:
 if start_epoch>=40:

@@ -1,0 +1,802 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[turkish,english]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{geometry}
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    breaklines=true,
+    showstringspaces=false
+}
+
+\title{\textbf{Cross-View Geo-Localization with RGBD:\\Technical Documentation and Theoretical Background}}
+\author{University-1652 Baseline with MiDaS Depth Estimation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+%===================================================================
+\section{Introduction}
+%===================================================================
+
+Bu dokümantasyon, satellite-to-drone cross-view geo-localization sistemi için geliştirilen RGBD (RGB + Depth) tabanlı deep learning pipeline'ının detaylı teknik açıklamasını içermektedir.
+
+\subsection{Problem Tanımı}
+\textbf{Cross-view geo-localization}, farklı bakış açılarından (viewpoints) alınmış görüntüler arasında eşleştirme yaparak lokasyon tespiti problemidir.
+
+\begin{itemize}
+    \item \textbf{Query}: Satellite (uydu) görüntüsü
+    \item \textbf{Gallery}: Drone (İHA) görüntüsü
+    \item \textbf{Amaç}: Query görüntüye en benzer gallery görüntüyü bul
+\end{itemize}
+
+\subsection{Araştırma Konuları (Research Keywords)}
+\begin{itemize}
+    \item Cross-view image matching
+    \item Geo-localization from aerial images
+    \item Multi-view metric learning
+    \item Siamese networks
+    \item Circle Loss
+    \item Monocular depth estimation
+    \item RGBD deep learning
+    \item Transfer learning with pretrained CNNs
+    \item Random erasing augmentation
+    \item Domain adaptation
+\end{itemize}
+
+%===================================================================
+\section{Model Architecture (model.py, model\_rgbd.py)}
+%===================================================================
+
+\subsection{GeM Pooling}
+
+\textbf{Generalized Mean (GeM) Pooling}, feature map'lerde spatial pooling için kullanılan gelişmiş bir yöntemdir.
+
+\subsubsection{Matematiksel Tanım}
+\begin{equation}
+    \text{GeM}(X) = \left(\frac{1}{|X|} \sum_{x \in X} x^p\right)^{1/p}
+\end{equation}
+
+Burada:
+\begin{itemize}
+    \item $X$: Feature map ($(H \times W)$ boyutunda)
+    \item $p$: Öğrenilebilir parametre (learnable power parameter)
+    \item $|X|$: Feature map'teki eleman sayısı
+\end{itemize}
+
+\subsubsection{Özel Durumlar}
+\begin{align}
+    p = 1 &\implies \text{Average Pooling} \\
+    p = \infty &\implies \text{Max Pooling} \\
+    p = 3 &\implies \text{Default GeM} \text{ (tipik başlangıç değeri)}
+\end{align}
+
+\subsubsection{PyTorch Implementasyonu}
+\begin{lstlisting}[language=Python]
+class GeM(nn.Module):
+    def __init__(self, dim=2048, p=3, eps=1e-6):
+        super(GeM, self).__init__()
+        # p parametresi gradient descent ile öğrenilir
+        self.p = nn.Parameter(torch.ones(dim)*p, requires_grad=True)
+        self.eps = eps
+        
+    def forward(self, x):
+        # x shape: (B, C, H, W)
+        x = x.clamp(min=self.eps).pow(self.p)  # x^p
+        x = F.avg_pool2d(x, (x.size(-2), x.size(-1)))  # Global pooling
+        x = x.view(x.size(0), x.size(1))  # (B, C)
+        x = x.pow(1./self.p)  # p-th root
+        return x
+\end{lstlisting}
+
+\subsubsection{Avantajları}
+\begin{itemize}
+    \item \textbf{Adaptif}: $p$ parametresi eğitim sırasında öğrenilir
+    \item \textbf{Diskriminatif}: Average ve max pooling arasında optimal dengeyi bulur
+    \item \textbf{Image retrieval}: Retrieval tasklerinde SOTA performans
+\end{itemize}
+
+\textbf{Teorik Kaynak}: Radenović et al., "Fine-tuning CNN Image Retrieval with No Human Annotation", TPAMI 2019
+
+%-------------------------------------------------------------------
+\subsection{ClassBlock: Feature Embedding Layer}
+
+\textbf{ClassBlock}, feature extraction sonrası classification head'i oluşturur.
+
+\subsubsection{Mimari Yapı}
+\begin{equation}
+    \text{ClassBlock}: \mathbb{R}^{2048} \xrightarrow{\text{Linear}} \mathbb{R}^{512} \xrightarrow{\text{BN}} \xrightarrow{\text{Dropout}} \xrightarrow{\text{Linear}} \mathbb{R}^{C}
+\end{equation}
+
+\begin{itemize}
+    \item \textbf{Input}: Feature vector $f \in \mathbb{R}^{2048}$ (ResNet50 output)
+    \item \textbf{Bottleneck}: $f' \in \mathbb{R}^{512}$ (embedding space)
+    \item \textbf{Output}: Logits $y \in \mathbb{R}^{C}$ ($C$ = number of classes)
+\end{itemize}
+
+\subsubsection{Bileşenler}
+\begin{enumerate}
+    \item \textbf{Linear (2048 → 512)}: Dimensionality reduction
+    \item \textbf{BatchNorm1d}: Normalization for stable training
+    \item \textbf{LeakyReLU (optional)}: Non-linearity, $\alpha = 0.1$
+    \item \textbf{Dropout}: Regularization, $p = 0.5$
+    \item \textbf{Classifier Linear (512 → C)}: Final classification layer
+\end{enumerate}
+
+\subsubsection{Weight Initialization}
+\begin{itemize}
+    \item \textbf{Kaiming Initialization} (He initialization):
+    \begin{equation}
+        W \sim \mathcal{N}\left(0, \sqrt{\frac{2}{n_{\text{in}}}}\right)
+    \end{equation}
+    
+    \item \textbf{Classifier Initialization}:
+    \begin{equation}
+        W \sim \mathcal{N}(0, 0.001^2), \quad b = 0
+    \end{equation}
+\end{itemize}
+
+\textbf{Teorik Kaynak}: He et al., "Delving Deep into Rectifiers", ICCV 2015
+
+%-------------------------------------------------------------------
+\subsection{RGBD Model Architecture (model\_rgbd.py)}
+
+\subsubsection{4-Channel Input Conversion}
+
+Standard ResNet50 3-channel (RGB) inputu alır. RGBD için 4. kanalı (depth) eklemek gerekir.
+
+\textbf{Fonksiyon}: \texttt{convert\_conv1\_to\_4channel}
+
+\paragraph{Adımlar:}
+\begin{enumerate}
+    \item Orijinal \texttt{conv1} ağırlıkları: $W_{\text{orig}} \in \mathbb{R}^{64 \times 3 \times 7 \times 7}$
+    \item Yeni \texttt{conv1} oluştur: $W_{\text{new}} \in \mathbb{R}^{64 \times 4 \times 7 \times 7}$
+    \item RGB kanallarını kopyala:
+    \begin{equation}
+        W_{\text{new}}[:, 0:3, :, :] = W_{\text{orig}}
+    \end{equation}
+    
+    \item Depth kanalını initialize et (RGB ortalaması):
+    \begin{equation}
+        W_{\text{new}}[:, 3, :, :] = \frac{1}{3}\sum_{c=0}^{2} W_{\text{orig}}[:, c, :, :]
+    \end{equation}
+\end{enumerate}
+
+\subsubsection{Neden RGB Ortalaması?}
+\begin{itemize}
+    \item \textbf{Transfer learning}: Depth kanalı sıfırdan başlamaz
+    \item \textbf{Benzer semantik}: Depth ve RGB intensity korelasyonlu
+    \item \textbf{Hızlı convergence}: Random initialization'dan daha iyi
+\end{itemize}
+
+%-------------------------------------------------------------------
+\subsection{Two-View Network}
+
+\textbf{two\_view\_net\_rgbd} sınıfı, satellite (RGBD) ve drone (RGB) için ayrı encoder kullanır.
+
+\subsubsection{Matematiksel Formülasyon}
+\begin{align}
+    x_{\text{sat}} &\in \mathbb{R}^{B \times 4 \times H \times W} \quad \text{(Satellite RGBD)} \\
+    x_{\text{drone}} &\in \mathbb{R}^{B \times 3 \times H \times W} \quad \text{(Drone RGB)}
+\end{align}
+
+\begin{align}
+    f_{\text{sat}} &= \phi_1(x_{\text{sat}}) \quad \text{(ResNet50-RGBD encoder)} \\
+    f_{\text{drone}} &= \phi_2(x_{\text{drone}}) \quad \text{(ResNet50-RGB encoder)}
+\end{align}
+
+Her iki feature $f_{\text{sat}}, f_{\text{drone}} \in \mathbb{R}^{B \times 2048}$ aynı classifier'a girer:
+\begin{equation}
+    y = \psi(f), \quad \psi: \mathbb{R}^{2048} \to \mathbb{R}^{512} \to \mathbb{R}^{C}
+\end{equation}
+
+\subsubsection{Shared Classifier}
+\begin{itemize}
+    \item \textbf{Embedding space paylaşılır}: Her iki view aynı metric space'e map edilir
+    \item \textbf{Cross-view matching}: $\text{sim}(f_{\text{sat}}, f_{\text{drone}}) = f_{\text{sat}}^T f_{\text{drone}}$
+    \item \textbf{Circle Loss}: Embedding space'de intra-class compact, inter-class separable
+\end{itemize}
+
+%===================================================================
+\section{Dataset Loading (dataset\_rgbd.py)}
+%===================================================================
+
+\subsection{RGBDSatelliteDataset Sınıfı}
+
+\subsubsection{Veri Formatı}
+\begin{itemize}
+    \item \textbf{RGB}: \texttt{satellite/0000/image001.jpg} $(H \times W \times 3)$
+    \item \textbf{Depth}: \texttt{satellite\_depth/0000/image001\_depth.jpg} $(H \times W \times 1)$
+\end{itemize}
+
+\subsubsection{Pipeline}
+\begin{algorithm}[H]
+\caption{RGBD Data Loading}
+\begin{algorithmic}[1]
+\STATE Load RGB image: $I_{\text{rgb}} \in [0, 255]^{H \times W \times 3}$
+\STATE Load Depth image: $I_{\text{depth}} \in [0, 255]^{H \times W}$ (grayscale)
+\STATE Apply transform to RGB: $T_{\text{rgb}}(I_{\text{rgb}}) \to \mathbb{R}^{3 \times 256 \times 256}$
+\STATE Apply transform to Depth: $T_{\text{depth}}(I_{\text{depth}}) \to \mathbb{R}^{1 \times 256 \times 256}$
+\STATE Concatenate: $I_{\text{rgbd}} = [I_{\text{rgb}}, I_{\text{depth}}] \in \mathbb{R}^{4 \times 256 \times 256}$
+\RETURN $I_{\text{rgbd}}$, label
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Transform Pipeline}
+\begin{lstlisting}[language=Python]
+transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(90),  # Satellite için
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                         std=[0.229, 0.224, 0.225])
+])
+\end{lstlisting}
+
+\textbf{Not}: Depth kanalı için normalization RGB ile aynı (ImageNet statistics).
+
+%===================================================================
+\section{Loss Functions}
+%===================================================================
+
+\subsection{Circle Loss (circle\_loss.py)}
+
+\textbf{Circle Loss}, metric learning için tasarlanmış gelişmiş bir loss fonksiyonudur.
+
+\subsubsection{Motivasyon}
+Traditional triplet loss ve softmax loss'un sınırlamalarını aşmak:
+\begin{itemize}
+    \item \textbf{Triplet loss}: Mining stratejisi gerektirir (hard negative)
+    \item \textbf{Softmax}: Embedding optimization için suboptimal
+    \item \textbf{Circle loss}: Her iki avantajı birleştirir
+\end{itemize}
+
+\subsubsection{Matematiksel Formülasyon}
+
+Normalized feature space'de:
+\begin{equation}
+    \mathbf{f}_i = \frac{\mathbf{z}_i}{\|\mathbf{z}_i\|_2}, \quad \mathbf{f}_i \in \mathbb{R}^{512}
+\end{equation}
+
+\paragraph{Similarity Matrix:}
+\begin{equation}
+    S_{ij} = \mathbf{f}_i^T \mathbf{f}_j \in [-1, 1]
+\end{equation}
+
+\paragraph{Positive ve Negative Pairs:}
+\begin{align}
+    \mathcal{P}_i &= \{j \mid y_i = y_j, j \neq i\} \quad \text{(Positive pairs)} \\
+    \mathcal{N}_i &= \{j \mid y_i \neq y_j\} \quad \text{(Negative pairs)}
+\end{align}
+
+\paragraph{Circle Loss Formülü:}
+\begin{equation}
+    \mathcal{L}_{\text{circle}} = \log\left[1 + \sum_{n \in \mathcal{N}_i} \exp(\gamma \alpha_n (s_n - \Delta_n)) \cdot \sum_{p \in \mathcal{P}_i} \exp(-\gamma \alpha_p (s_p - \Delta_p))\right]
+\end{equation}
+
+Burada:
+\begin{align}
+    \alpha_n &= \max(0, s_n + m) \quad \text{(Negative weight)} \\
+    \alpha_p &= \max(0, -s_p + 1 + m) \quad \text{(Positive weight)} \\
+    \Delta_n &= m, \quad \Delta_p = 1 - m \\
+    m &= 0.25 \quad \text{(Margin parameter)} \\
+    \gamma &= 256 \quad \text{(Scale factor)}
+\end{align}
+
+\subsubsection{Intuition}
+\begin{itemize}
+    \item \textbf{Positive pairs}: $s_p \to 1$ (maximize similarity)
+    \item \textbf{Negative pairs}: $s_n \to -1$ (minimize similarity)
+    \item \textbf{Adaptive weights}: Zor örneklere daha fazla ağırlık
+    \item \textbf{Margin $m$}: Decision boundary için buffer
+\end{itemize}
+
+\textbf{Teorik Kaynak}: Sun et al., "Circle Loss: A Unified Perspective of Pair Similarity Optimization", CVPR 2020
+
+%-------------------------------------------------------------------
+\subsection{Cross-Entropy Loss}
+
+Standard classification loss:
+\begin{equation}
+    \mathcal{L}_{\text{CE}} = -\frac{1}{B}\sum_{i=1}^{B} \log\frac{\exp(z_{y_i})}{\sum_{j=1}^{C} \exp(z_j)}
+\end{equation}
+
+Burada:
+\begin{itemize}
+    \item $z \in \mathbb{R}^{C}$: Logits (classifier output)
+    \item $y_i$: Ground truth label
+    \item $B$: Batch size
+    \item $C$: Number of classes (701 for University-1652)
+\end{itemize}
+
+%-------------------------------------------------------------------
+\subsection{Combined Loss}
+
+Training sırasında her iki loss birleştirilir:
+\begin{equation}
+    \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{CE}} + \lambda \mathcal{L}_{\text{circle}}
+\end{equation}
+
+Tipik olarak $\lambda = 1$ (equal weighting).
+
+%===================================================================
+\section{Data Augmentation}
+%===================================================================
+
+\subsection{Random Erasing (random\_erasing.py)}
+
+\textbf{Random Erasing}, overfitting'i azaltmak için görüntünün rastgele bir bölgesini maskeler.
+
+\subsubsection{Algoritma}
+\begin{algorithm}[H]
+\caption{Random Erasing}
+\begin{algorithmic}[1]
+\STATE \textbf{Input}: Image $I \in \mathbb{R}^{C \times H \times W}$, probability $p$
+\STATE Generate random number $r \sim \mathcal{U}(0,1)$
+\IF{$r > p$}
+    \RETURN $I$ \quad (no erasing)
+\ENDIF
+\STATE Select area ratio: $S_e \sim \mathcal{U}(s_l, s_h)$ where $s_l=0.02, s_h=0.4$
+\STATE Select aspect ratio: $r_e \sim \mathcal{U}(r_1, 1/r_1)$ where $r_1=0.3$
+\STATE Compute dimensions: $h_e = \sqrt{S_e \cdot H \cdot W \cdot r_e}$, $w_e = \sqrt{S_e \cdot H \cdot W / r_e}$
+\STATE Random position: $(x_1, y_1) \sim \mathcal{U}(0, H-h_e) \times \mathcal{U}(0, W-w_e)$
+\STATE Erase region: $I[:, x_1:x_1+h_e, y_1:y_1+w_e] = \mu$ (mean color)
+\RETURN $I$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Parametreler}
+\begin{itemize}
+    \item $p = 0.5$: Erasing probability
+    \item $s_l = 0.02, s_h = 0.4$: Area ratio bounds
+    \item $r_1 = 0.3$: Aspect ratio bound
+    \item $\mu = [0.4914, 0.4822, 0.4465]$: ImageNet mean
+\end{itemize}
+
+\textbf{Teorik Kaynak}: Zhong et al., "Random Erasing Data Augmentation", AAAI 2020
+
+%-------------------------------------------------------------------
+\subsection{Color Jitter}
+
+\begin{equation}
+    I' = \alpha \cdot I + \beta
+\end{equation}
+
+\begin{itemize}
+    \item \textbf{Brightness}: $\alpha \sim \mathcal{U}(0.9, 1.1)$
+    \item \textbf{Contrast}: Scaling factor $\sim \mathcal{U}(0.9, 1.1)$
+    \item \textbf{Saturation}: HSV space'de $\pm 10\%$
+    \item \textbf{Hue}: $\pm 0$ (tipik olarak devre dışı)
+\end{itemize}
+
+%-------------------------------------------------------------------
+\subsection{Geometric Augmentations}
+
+\subsubsection{Satellite-Specific}
+\begin{itemize}
+    \item \textbf{RandomRotation(90°)}: Uydu görüntüsü yön invaryant
+    \item \textbf{RandomAffine}: Rotation, translation, scale
+    \item \textbf{RandomHorizontalFlip}: Mirror symmetry
+\end{itemize}
+
+\subsubsection{Drone-Specific}
+\begin{itemize}
+    \item \textbf{RandomCrop}: Simüle edilmiş zoom
+    \item \textbf{RandomHorizontalFlip}: View variation
+    \item \textbf{Padding + Crop}: Edge artifacts'ı önle
+\end{itemize}
+
+%===================================================================
+\section{Training Pipeline (train\_cvusa.py)}
+%===================================================================
+
+\subsection{Hyperparameters}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|l|}
+\hline
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\hline
+Batch Size & 8 & Per-GPU batch size \\
+Learning Rate & 0.01 & Initial LR \\
+Optimizer & SGD & Momentum = 0.9 \\
+Weight Decay & $5 \times 10^{-4}$ & L2 regularization \\
+Epochs & 60 & Total training epochs \\
+Scheduler & StepLR & Decay at [40, 50] \\
+Decay Factor & 0.1 & LR multiplier \\
+Dropout & 0.5 & Classifier dropout \\
+Image Size & $384 \times 384$ & Input resolution \\
+\hline
+\end{tabular}
+\caption{Training Hyperparameters}
+\end{table}
+
+%-------------------------------------------------------------------
+\subsection{Learning Rate Schedule}
+
+\begin{equation}
+    \text{LR}(\text{epoch}) = \begin{cases}
+        0.01 & \text{epoch} \in [0, 40) \\
+        0.001 & \text{epoch} \in [40, 50) \\
+        0.0001 & \text{epoch} \in [50, 60]
+    \end{cases}
+\end{equation}
+
+\textbf{Warm-up} (optional):
+\begin{equation}
+    \text{LR}(\text{epoch}) = \frac{\text{epoch}}{K} \cdot \text{LR}_{\text{base}}, \quad \text{epoch} < K
+\end{equation}
+Tipik $K = 5$ (5 epoch warm-up).
+
+%-------------------------------------------------------------------
+\subsection{Training Loop}
+
+\begin{algorithm}[H]
+\caption{Two-View Training}
+\begin{algorithmic}[1]
+\FOR{epoch = 1 to 60}
+    \FOR{each batch in dataloader}
+        \STATE Sample satellite batch: $X_{\text{sat}}, Y_{\text{sat}}$
+        \STATE Sample drone batch: $X_{\text{drone}}, Y_{\text{drone}}$
+        \STATE Forward pass: $Z_{\text{sat}}, F_{\text{sat}} = \text{model}(X_{\text{sat}}, \text{None})$
+        \STATE Forward pass: $Z_{\text{drone}}, F_{\text{drone}} = \text{model}(\text{None}, X_{\text{drone}})$
+        \STATE Compute CE loss: $\mathcal{L}_{\text{CE,sat}} + \mathcal{L}_{\text{CE,drone}}$
+        \STATE Normalize features: $F_{\text{sat}} = F_{\text{sat}} / \|F_{\text{sat}}\|_2$
+        \STATE Compute Circle loss: $\mathcal{L}_{\text{circle}}(F_{\text{sat}}, F_{\text{drone}}, Y)$
+        \STATE Total loss: $\mathcal{L} = \mathcal{L}_{\text{CE}} + \mathcal{L}_{\text{circle}}$
+        \STATE Backward: $\nabla_\theta \mathcal{L}$
+        \STATE Optimizer step
+    \ENDFOR
+    \STATE Update learning rate
+    \STATE Save checkpoint
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+%===================================================================
+\section{Evaluation Metrics (evaluate\_gpu.py)}
+%===================================================================
+
+\subsection{Cumulative Matching Characteristic (CMC)}
+
+\textbf{CMC curve}, retrieval sistemlerinde kullanılan temel metriklerdir.
+
+\subsubsection{Tanım}
+\begin{equation}
+    \text{CMC@K} = \frac{1}{N_q} \sum_{i=1}^{N_q} \mathbb{1}[\text{rank}(i) \leq K]
+\end{equation}
+
+Burada:
+\begin{itemize}
+    \item $N_q$: Query sayısı
+    \item $\text{rank}(i)$: $i$-inci query için doğru match'in sıralaması
+    \item $K$: Rank threshold (1, 5, 10)
+\end{itemize}
+
+\subsubsection{Yorumlama}
+\begin{itemize}
+    \item \textbf{Rank-1}: İlk tahmin doğru mu? (Top-1 accuracy)
+    \item \textbf{Rank-5}: İlk 5 tahmin içinde doğru var mı?
+    \item \textbf{Rank-10}: İlk 10 tahmin içinde doğru var mı?
+\end{itemize}
+
+%-------------------------------------------------------------------
+\subsection{Mean Average Precision (mAP)}
+
+\subsubsection{Average Precision (AP)}
+Tek bir query için:
+\begin{equation}
+    \text{AP} = \frac{1}{N_{\text{rel}}} \sum_{k=1}^{N} P(k) \cdot \text{rel}(k)
+\end{equation}
+
+\begin{itemize}
+    \item $N_{\text{rel}}$: Relevant (doğru) sonuç sayısı
+    \item $P(k) = \frac{\text{\# relevant in top-}k}{k}$: Precision at rank $k$
+    \item $\text{rel}(k) = 1$ if rank $k$ relevant, else 0
+\end{itemize}
+
+\subsubsection{Mean Average Precision}
+\begin{equation}
+    \text{mAP} = \frac{1}{N_q} \sum_{i=1}^{N_q} \text{AP}_i
+\end{equation}
+
+\textbf{Yorumlama}: mAP, tüm querylerin ortalama precision'ını ölçer. Yüksek mAP, sistemin genel retrieval kalitesinin iyi olduğunu gösterir.
+
+%-------------------------------------------------------------------
+\subsection{Evaluation Pipeline}
+
+\begin{algorithm}[H]
+\caption{Cross-View Evaluation}
+\begin{algorithmic}[1]
+\STATE Extract query features: $\{f_i^q\}_{i=1}^{N_q}$ from satellite
+\STATE Extract gallery features: $\{f_j^g\}_{j=1}^{N_g}$ from drone
+\STATE Normalize: $f \leftarrow f / \|f\|_2$
+\FOR{each query $i$}
+    \STATE Compute similarity: $s_{ij} = (f_i^q)^T f_j^g, \forall j$
+    \STATE Sort gallery by similarity (descending)
+    \STATE Find rank of correct match
+    \STATE Compute AP
+\ENDFOR
+\STATE Compute CMC@1, CMC@5, CMC@10
+\STATE Compute mAP
+\end{algorithmic}
+\end{algorithm}
+
+%===================================================================
+\section{MiDaS Depth Estimation}
+%===================================================================
+
+\subsection{Monocular Depth Estimation}
+
+\textbf{MiDaS} (Mixed Data Sampling), tek bir RGB görüntüden depth map tahmin eden bir modeldir.
+
+\subsubsection{Mimari}
+\begin{itemize}
+    \item \textbf{Encoder}: EfficientNet-based backbone
+    \item \textbf{Decoder}: Multi-scale feature fusion
+    \item \textbf{Output}: Relative depth map (inverse depth)
+\end{itemize}
+
+\subsubsection{Matematiksel Model}
+\begin{equation}
+    D = \mathcal{F}(I_{\text{RGB}})
+\end{equation}
+
+Burada:
+\begin{itemize}
+    \item $I_{\text{RGB}} \in \mathbb{R}^{H \times W \times 3}$: Input RGB image
+    \item $D \in \mathbb{R}^{H \times W}$: Depth map (relative values)
+    \item $\mathcal{F}$: MiDaS neural network
+\end{itemize}
+
+\subsubsection{Depth Normalization}
+MiDaS çıktısı relative depth olduğundan, normalize edilmesi gerekir:
+\begin{equation}
+    D_{\text{norm}} = 255 \cdot \frac{D - D_{\min}}{D_{\max} - D_{\min}}
+\end{equation}
+
+%-------------------------------------------------------------------
+\subsection{MiDaS Small Model}
+
+\begin{itemize}
+    \item \textbf{Model boyutu}: $\sim$21MB
+    \item \textbf{Inference hızı}: $\sim$0.1s/image (GPU)
+    \item \textbf{Input size}: Any resolution (internally resized)
+    \item \textbf{Output}: Same resolution as input
+\end{itemize}
+
+\textbf{Kullanım}:
+\begin{lstlisting}[language=Python]
+midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small")
+transform = torch.hub.load("intel-isl/MiDaS", "transforms")
+
+img = cv2.imread("satellite.jpg")
+input_batch = transform.small_transform(img)
+depth = midas(input_batch)
+\end{lstlisting}
+
+\textbf{Teorik Kaynak}: Ranftl et al., "Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-shot Cross-dataset Transfer", TPAMI 2020
+
+%===================================================================
+\section{Theoretical Background}
+%===================================================================
+
+\subsection{Metric Learning}
+
+\textbf{Amaç}: Feature space'de benzer örnekler yakın, farklı örnekler uzak olacak şekilde metric öğren.
+
+\subsubsection{Distance Metrics}
+\begin{itemize}
+    \item \textbf{Euclidean}: $d(x, y) = \|x - y\|_2$
+    \item \textbf{Cosine}: $d(x, y) = 1 - \frac{x^T y}{\|x\|\|y\|}$
+    \item \textbf{Mahalanobis}: $d(x, y) = \sqrt{(x-y)^T M (x-y)}$
+\end{itemize}
+
+Bu projede \textbf{cosine similarity} kullanılıyor:
+\begin{equation}
+    \text{sim}(x, y) = \frac{x^T y}{\|x\|\|y\|} \in [-1, 1]
+\end{equation}
+
+%-------------------------------------------------------------------
+\subsection{Transfer Learning}
+
+\textbf{ImageNet pretrained weights}, bu projede transfer learning için kullanılır.
+
+\subsubsection{Neden Transfer Learning?}
+\begin{itemize}
+    \item \textbf{Veri kısıtı}: University-1652 nispeten küçük ($\sim$50K images)
+    \item \textbf{Generalization}: ImageNet'te öğrenilen low-level features evrensel
+    \item \textbf{Hız}: Random initialization'dan çok daha hızlı converge
+\end{itemize}
+
+\subsubsection{Fine-tuning Strategy}
+\begin{enumerate}
+    \item Load pretrained ResNet50 (ImageNet weights)
+    \item Freeze initial layers (conv1-layer2) - optional
+    \item Train classifier + final layers (layer3-layer4)
+    \item Gradually unfreeze early layers
+\end{enumerate}
+
+%-------------------------------------------------------------------
+\subsection{Cross-View Matching Challenges}
+
+\begin{itemize}
+    \item \textbf{Viewpoint variation}: Satellite nadir view, drone oblique view
+    \item \textbf{Scale difference}: Satellite çok daha geniş alan kaplar
+    \item \textbf{Appearance gap}: Lighting, weather, season differences
+    \item \textbf{Occlusion}: Buildings, trees farklı görünür
+\end{itemize}
+
+\textbf{RGBD'nin katkısı}:
+\begin{itemize}
+    \item Depth, 3D structure bilgisi sağlar
+    \item Viewpoint invariant features öğrenmeyi kolaylaştırır
+    \item Buildings height, terrain topology gibi geometric cues
+\end{itemize}
+
+%===================================================================
+\section{Advanced Research Topics}
+%===================================================================
+
+\subsection{Future Directions}
+
+\subsubsection{Attention Mechanisms}
+\begin{itemize}
+    \item \textbf{Spatial Attention}: Önemli bölgelere focus
+    \item \textbf{Channel Attention}: Informative channels'ı vurgula
+    \item \textbf{Cross-Attention}: Satellite-drone feature alignment
+\end{itemize}
+
+\subsubsection{Semi-Supervised Learning}
+\begin{itemize}
+    \item \textbf{Pseudo-labeling}: Unlabeled data'dan yararlan
+    \item \textbf{Consistency regularization}: Augmented views arasında consistency
+    \item \textbf{Contrastive learning}: SimCLR, MoCo benzeri approaches
+\end{itemize}
+
+\subsubsection{Multi-Modal Fusion}
+\begin{itemize}
+    \item \textbf{Early fusion}: RGBD gibi, input seviyesinde birleştir
+    \item \textbf{Late fusion}: Feature seviyesinde birleştir
+    \item \textbf{Attention fusion}: Learned weights ile modal combination
+\end{itemize}
+
+%===================================================================
+\section{Araştırma Kaynakları (Research Keywords)}
+%===================================================================
+
+\subsection{Temel Konular}
+\begin{itemize}
+    \item \textbf{Cross-view image matching}
+    \item \textbf{Geo-localization from aerial images}
+    \item \textbf{Multi-view metric learning}
+    \item \textbf{Siamese networks}
+    \item \textbf{Triplet loss and its variants}
+    \item \textbf{Circle loss}
+    \item \textbf{Monocular depth estimation}
+    \item \textbf{RGBD deep learning}
+    \item \textbf{Transfer learning with CNNs}
+\end{itemize}
+
+\subsection{İleri Seviye}
+\begin{itemize}
+    \item \textbf{Domain adaptation for cross-view matching}
+    \item \textbf{Attention mechanisms in computer vision}
+    \item \textbf{Self-supervised learning}
+    \item \textbf{Contrastive learning}
+    \item \textbf{Image retrieval methods}
+    \item \textbf{Visual place recognition}
+    \item \textbf{Feature aggregation techniques}
+    \item \textbf{Hard negative mining strategies}
+\end{itemize}
+
+\subsection{Dataset ve Benchmarklar}
+\begin{itemize}
+    \item \textbf{University-1652 dataset}
+    \item \textbf{CVUSA dataset}
+    \item \textbf{CVACT dataset}
+    \item \textbf{VIGOR dataset}
+\end{itemize}
+
+%===================================================================
+\section{Pratik Uygulama Önerileri}
+%===================================================================
+
+\subsection{Hiperparametre Tuning}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Parameter} & \textbf{Default} & \textbf{Tuning Range} \\
+\hline
+Learning Rate & 0.01 & [0.001, 0.1] \\
+Batch Size & 8 & [4, 16, 32] \\
+Dropout & 0.5 & [0.3, 0.7] \\
+Weight Decay & $5 \times 10^{-4}$ & [$10^{-5}$, $10^{-3}$] \\
+Circle Loss $m$ & 0.25 & [0.1, 0.5] \\
+Circle Loss $\gamma$ & 256 & [64, 512] \\
+\hline
+\end{tabular}
+\caption{Hyperparameter Tuning Ranges}
+\end{table}
+
+\subsection{Debugging Checklist}
+\begin{enumerate}
+    \item \textbf{Data loading}: Print batch shapes, visualize samples
+    \item \textbf{Model output}: Check logits range, NaN values
+    \item \textbf{Gradients}: Monitor gradient norms (exploding/vanishing)
+    \item \textbf{Loss}: Plot training loss curve
+    \item \textbf{Accuracy}: Compute train/val accuracy each epoch
+    \item \textbf{Features}: Visualize t-SNE of learned embeddings
+\end{enumerate}
+
+%===================================================================
+\section{Sonuç}
+%===================================================================
+
+Bu dokümantasyon, satellite-to-drone cross-view geo-localization için RGBD-based deep learning sisteminin detaylı teknik açıklamasını sunmaktadır. Model mimarisi, loss fonksiyonları, data augmentation, training pipeline ve evaluation metrikleri teorik temelleriyle birlikte açıklanmıştır.
+
+\subsection{Ana Katkılar}
+\begin{enumerate}
+    \item \textbf{4-channel RGBD input}: MiDaS depth estimation ile 3D bilgi eklenmesi
+    \item \textbf{Two-view architecture}: Satellite ve drone için ayrı encoders
+    \item \textbf{Circle Loss}: Metric learning için state-of-the-art loss
+    \item \textbf{Transfer learning}: ImageNet pretrained weights kullanımı
+\end{enumerate}
+
+\subsection{Beklenen Sonuçlar}
+\begin{itemize}
+    \item \textbf{Rank-1 Accuracy}: 35-40\%
+    \item \textbf{Rank-5 Accuracy}: 60-65\%
+    \item \textbf{mAP}: 43-48\%
+\end{itemize}
+
+\vspace{1cm}
+\noindent
+\textit{Bu doküman, University-1652 Baseline projesinin teknik implementasyonunu ve teorik altyapısını detaylı olarak açıklamaktadır. İleri okuma için referans listesindeki makalelere başvurulabilir.}
+
+%===================================================================
+\section*{Referanslar}
+%===================================================================
+
+\begin{enumerate}
+    \item Zheng et al., "University-1652: A Multi-view Multi-source Benchmark for Drone-based Geo-localization", ACM MM 2020
+    
+    \item Sun et al., "Circle Loss: A Unified Perspective of Pair Similarity Optimization", CVPR 2020
+    
+    \item Ranftl et al., "Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-shot Cross-dataset Transfer", TPAMI 2020
+    
+    \item Radenović et al., "Fine-tuning CNN Image Retrieval with No Human Annotation", TPAMI 2019
+    
+    \item He et al., "Deep Residual Learning for Image Recognition", CVPR 2016
+    
+    \item He et al., "Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification", ICCV 2015
+    
+    \item Zhong et al., "Random Erasing Data Augmentation", AAAI 2020
+    
+    \item Schroff et al., "FaceNet: A Unified Embedding for Face Recognition and Clustering", CVPR 2015
+    
+    \item Hermans et al., "In Defense of the Triplet Loss for Person Re-Identification", arXiv 2017
+    
+    \item Wang et al., "Multi-Similarity Loss with General Pair Weighting for Deep Metric Learning", CVPR 2019
+\end{enumerate}
+
+\end{document}
