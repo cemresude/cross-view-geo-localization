@@ -122,7 +122,7 @@ if opt.multi:
     image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
-else# Query: Satellite (RGBD if enabled)
+else:
     if opt.use_rgbd:
         query_dataset = RGBDSatelliteDataset(
             rgb_folder=os.path.join(data_dir, 'query_satellite'),
