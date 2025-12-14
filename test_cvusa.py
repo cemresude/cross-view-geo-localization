@@ -141,7 +141,6 @@ else# Query: Satellite (RGBD if enabled)
         'gallery_drone': torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16)
     }
 
-                                             shuffle=False, num_workers=16) for x in ['query_satellite','gallery_drone']}
 use_gpu = torch.cuda.is_available()
 
 ######################################################################
