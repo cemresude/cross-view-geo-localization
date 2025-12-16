@@ -19,7 +19,7 @@ import yaml
 import math
 from model import ft_net, two_view_net, three_view_net
 from model_rgbd import two_view_net_rgbd
-from dataset_rgbd import CVUSADataset, CVUSARGBDDataset
+from dataset_rgbd import CVUSADataset, CVUSARGBDDataset, RGBDSatelliteDataset
 from utils import load_network
 
 #fp16
@@ -126,7 +126,7 @@ if opt.multi:
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
-    # For CVUSA dataset
+    # For CVUSA/University1652 dataset
     query_folder = os.path.join(data_dir, opt.query_folder)
     gallery_folder = os.path.join(data_dir, opt.gallery_folder)
     
@@ -139,27 +139,57 @@ else:
             f"Use --query_folder to specify the correct folder name"
         )
     
-    if opt.use_rgbd:
-        print(f"🌈 Using RGBD dataset for query: {opt.query_folder}")
-        depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
-        query_dataset = CVUSARGBDDataset(
-            rgb_folder=query_folder,
-            depth_folder=depth_folder,
-            transform=data_transforms
-        )
-    else:
-        print(f"🔵 Using RGB dataset for query: {opt.query_folder}")
-        query_dataset = CVUSADataset(
-            folder=query_folder,
-            transform=data_transforms
-        )
+    # Auto-detect folder structure (flat vs nested)
+    def has_nested_structure(folder):
+        """Check if folder has class subfolders (University1652) or flat structure (CVUSA)"""
+        items = os.listdir(folder)
+        if not items:
+            return False
+        # Check first few items - if they're directories, it's nested
+        dirs = [d for d in items[:10] if os.path.isdir(os.path.join(folder, d))]
+        return len(dirs) > 0
     
-    # Gallery
-    print(f"🚁 Loading gallery: {opt.gallery_folder}")
-    gallery_dataset = CVUSADataset(
-        folder=gallery_folder,
-        transform=data_transforms
-    )
+    is_nested = has_nested_structure(query_folder)
+    print(f"📁 Detected {'nested (University1652)' if is_nested else 'flat (CVUSA)'} folder structure")
+    
+    if is_nested:
+        # University1652 format - use ImageFolder
+        if opt.use_rgbd:
+            print(f"🌈 Using RGBD dataset (University1652) for query: {opt.query_folder}")
+            depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
+            query_dataset = RGBDSatelliteDataset(
+                rgb_folder=query_folder,
+                depth_folder=depth_folder,
+                transform=data_transforms
+            )
+        else:
+            print(f"🔵 Using RGB dataset (University1652) for query: {opt.query_folder}")
+            query_dataset = datasets.ImageFolder(query_folder, data_transforms)
+        
+        print(f"🚁 Loading gallery (University1652): {opt.gallery_folder}")
+        gallery_dataset = datasets.ImageFolder(gallery_folder, data_transforms)
+    else:
+        # CVUSA format - use CVUSADataset
+        if opt.use_rgbd:
+            print(f"🌈 Using RGBD dataset (CVUSA) for query: {opt.query_folder}")
+            depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
+            query_dataset = CVUSARGBDDataset(
+                rgb_folder=query_folder,
+                depth_folder=depth_folder,
+                transform=data_transforms
+            )
+        else:
+            print(f"🔵 Using RGB dataset (CVUSA) for query: {opt.query_folder}")
+            query_dataset = CVUSADataset(
+                folder=query_folder,
+                transform=data_transforms
+            )
+        
+        print(f"🚁 Loading gallery (CVUSA): {opt.gallery_folder}")
+        gallery_dataset = CVUSADataset(
+            folder=gallery_folder,
+            transform=data_transforms
+        )
     
     image_datasets = {opt.query_folder: query_dataset, opt.gallery_folder: gallery_dataset}
     dataloaders = {
@@ -268,10 +298,28 @@ def get_id(img_path):
     labels = []
     paths = []
     for path, v in img_path:
-        # For CVUSA: extract ID from filename
-        filename = os.path.basename(path)
-        file_id = filename.split('.')[0]
-        labels.append(int(file_id) if file_id.isdigit() else v)
+        # University1652 format uses class folders (v is the class label)
+        # CVUSA format uses filename as ID
+        if isinstance(path, tuple):
+            path = path[0]
+        
+        # Try to use v (class label) first, if it's valid
+        if isinstance(v, int):
+            labels.append(v)
+        else:
+            # Fallback: extract ID from filename or folder name
+            filename = os.path.basename(path)
+            folder_name = os.path.basename(os.path.dirname(path))
+            
+            # Try folder name first (University1652)
+            if folder_name.isdigit():
+                labels.append(int(folder_name))
+            # Then try filename (CVUSA)
+            elif filename.split('.')[0].isdigit():
+                labels.append(int(filename.split('.')[0]))
+            else:
+                labels.append(0)
+        
         paths.append(path)
     return labels, paths
 
@@ -305,16 +353,18 @@ which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
 print('%d -> %d:'%(which_query, which_gallery))
 
-gallery_path = image_datasets[gallery_name].samples  # For CVUSA dataset
+# Get samples/imgs depending on dataset type
+gallery_path = getattr(image_datasets[gallery_name], 'samples', None) or image_datasets[gallery_name].imgs
+query_path = getattr(image_datasets[query_name], 'samples', None) or image_datasets[query_name].imgs
+
 f = open('gallery_name.txt','w')
 for p in gallery_path:
-    f.write(p[0]+'\n')
+    f.write((p[0] if isinstance(p, tuple) else p) + '\n')
 f.close()
 
-query_path = image_datasets[query_name].samples  # For CVUSA dataset
 f = open('query_name.txt','w')
 for p in query_path:
-    f.write(p[0]+'\n')
+    f.write((p[0] if isinstance(p, tuple) else p) + '\n')
 f.close()
 
 gallery_label, gallery_path  = get_id(gallery_path)
