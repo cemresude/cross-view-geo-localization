@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Custom dataset for RGBD satellite images with depth from MiDaS
+Supports both University1652 (with class folders) and CVUSA (flat folder) formats
 """
 
 import torch
@@ -8,6 +9,157 @@ from torch.utils.data import Dataset
 from PIL import Image
 import numpy as np
 import os
+
+class CVUSADataset(Dataset):
+    """
+    CVUSA dataset loader - files are directly in folder, no class subfolders
+    Automatically assigns class based on filename
+    """
+    def __init__(self, folder, transform=None):
+        """
+        Args:
+            folder: Image folder (satellite or drone)
+            transform: torchvision transforms
+        """
+        self.folder = folder
+        self.transform = transform
+        self.samples = []
+        
+        # List all images
+        if not os.path.exists(folder):
+            raise FileNotFoundError(f"Folder not found: {folder}")
+            
+        image_files = [f for f in os.listdir(folder) 
+                      if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+        
+        if len(image_files) == 0:
+            raise ValueError(f"No images found in {folder}")
+        
+        # Extract class from filename (e.g., 000001.jpg -> class 0)
+        # Each unique ID is a class
+        file_to_class = {}
+        unique_ids = sorted(set([f.split('.')[0] for f in image_files]))
+        
+        for idx, img_id in enumerate(unique_ids):
+            file_to_class[img_id] = idx
+        
+        # Build sample list
+        for img_name in image_files:
+            img_id = img_name.split('.')[0]
+            img_path = os.path.join(folder, img_name)
+            label = file_to_class[img_id]
+            self.samples.append((img_path, label))
+        
+        self.classes = [str(i) for i in range(len(unique_ids))]
+        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
+        
+        print(f"✅ Loaded {len(self.samples)} images from {folder}")
+        print(f"   Classes: {len(self.classes)}")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        img_path, label = self.samples[idx]
+        img = Image.open(img_path).convert('RGB')
+        
+        if self.transform:
+            img = self.transform(img)
+        
+        return img, label
+
+
+class CVUSARGBDDataset(Dataset):
+    """
+    CVUSA RGBD dataset - RGB + Depth
+    """
+    def __init__(self, rgb_folder, depth_folder, transform=None):
+        """
+        Args:
+            rgb_folder: RGB satellite image folder
+            depth_folder: Depth map folder
+            transform: torchvision transforms
+        """
+        self.rgb_folder = rgb_folder
+        self.depth_folder = depth_folder
+        self.transform = transform
+        self.samples = []
+        
+        if not os.path.exists(rgb_folder):
+            raise FileNotFoundError(f"RGB folder not found: {rgb_folder}")
+        if not os.path.exists(depth_folder):
+            raise FileNotFoundError(f"Depth folder not found: {depth_folder}")
+        
+        # List RGB files
+        rgb_files = [f for f in os.listdir(rgb_folder) 
+                    if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+        
+        if len(rgb_files) == 0:
+            raise ValueError(f"No RGB images found in {rgb_folder}")
+        
+        # Extract class from filename
+        file_to_class = {}
+        unique_ids = sorted(set([f.split('.')[0] for f in rgb_files]))
+        
+        for idx, img_id in enumerate(unique_ids):
+            file_to_class[img_id] = idx
+        
+        # Match RGB + Depth
+        for img_name in rgb_files:
+            img_id = img_name.split('.')[0]
+            rgb_path = os.path.join(rgb_folder, img_name)
+            
+            # Look for depth file
+            depth_name = img_name.replace('.jpg', '_depth.jpg').replace('.png', '_depth.png')
+            depth_path = os.path.join(depth_folder, depth_name)
+            
+            if os.path.exists(depth_path):
+                label = file_to_class[img_id]
+                self.samples.append((rgb_path, depth_path, label))
+            else:
+                print(f"⚠️  Depth not found for {img_name}, skipping...")
+        
+        self.classes = [str(i) for i in range(len(unique_ids))]
+        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
+        
+        print(f"✅ Loaded {len(self.samples)} RGBD pairs from {rgb_folder}")
+        print(f"   Classes: {len(self.classes)}")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        rgb_path, depth_path, label = self.samples[idx]
+        
+        # Load RGB
+        rgb = Image.open(rgb_path).convert('RGB')
+        
+        # Load Depth (grayscale)
+        depth = Image.open(depth_path).convert('L')
+        
+        # Apply transform
+        if self.transform:
+            # RGB transform
+            rgb_tensor = self.transform(rgb)  # (3, H, W)
+            
+            # Depth transform (same size)
+            from torchvision import transforms
+            depth_transform = transforms.Compose([
+                transforms.Resize(rgb_tensor.shape[1:]),
+                transforms.ToTensor(),
+            ])
+            depth_tensor = depth_transform(depth)  # (1, H, W)
+            
+            # Combine RGBD
+            rgbd_tensor = torch.cat([rgb_tensor, depth_tensor], dim=0)  # (4, H, W)
+        else:
+            rgb_np = np.array(rgb)
+            depth_np = np.array(depth)
+            rgbd_np = np.dstack((rgb_np, depth_np))
+            rgbd_tensor = torch.from_numpy(rgbd_np).permute(2, 0, 1).float() / 255.0
+        
+        return rgbd_tensor, label
+
 
 class RGBDSatelliteDataset(Dataset):
     """
