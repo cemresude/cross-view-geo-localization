@@ -47,6 +47,8 @@ parser.add_argument('--multi', action='store_true', help='use multiple query' )
 parser.add_argument('--use_rgbd', action='store_true', help='use RGBD satellite images')
 parser.add_argument('--fp16', action='store_true', help='use fp16.' )
 parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,1.1  1,1.1,1.2')
+parser.add_argument('--query_folder', default='satellite', type=str, help='query folder name (satellite for CVUSA)')
+parser.add_argument('--gallery_folder', default='streetview', type=str, help='gallery folder name (streetview for CVUSA)')
 
 opt = parser.parse_args()
 ###load config###
@@ -125,31 +127,44 @@ if opt.multi:
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
     # For CVUSA dataset
+    query_folder = os.path.join(data_dir, opt.query_folder)
+    gallery_folder = os.path.join(data_dir, opt.gallery_folder)
+    
+    # Check if folders exist and print helpful message
+    if not os.path.exists(query_folder):
+        available_folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
+        raise FileNotFoundError(
+            f"Query folder not found: {query_folder}\n"
+            f"Available folders in {data_dir}: {available_folders}\n"
+            f"Use --query_folder to specify the correct folder name"
+        )
+    
     if opt.use_rgbd:
-        print("🌈 Using RGBD dataset for CVUSA query satellite")
+        print(f"🌈 Using RGBD dataset for query: {opt.query_folder}")
+        depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
         query_dataset = CVUSARGBDDataset(
-            rgb_folder=os.path.join(data_dir, 'query_satellite'),
-            depth_folder=os.path.join(data_dir, 'query_satellite_depth'),
+            rgb_folder=query_folder,
+            depth_folder=depth_folder,
             transform=data_transforms
         )
     else:
-        print("🔵 Using RGB dataset for CVUSA query satellite")
+        print(f"🔵 Using RGB dataset for query: {opt.query_folder}")
         query_dataset = CVUSADataset(
-            folder=os.path.join(data_dir, 'query_satellite'),
+            folder=query_folder,
             transform=data_transforms
         )
     
-    # Gallery: Drone (always RGB)
-    print("🚁 Loading CVUSA gallery drone")
+    # Gallery
+    print(f"🚁 Loading gallery: {opt.gallery_folder}")
     gallery_dataset = CVUSADataset(
-        folder=os.path.join(data_dir, 'gallery_drone'),
+        folder=gallery_folder,
         transform=data_transforms
     )
     
-    image_datasets = {'query_satellite': query_dataset, 'gallery_drone': gallery_dataset}
+    image_datasets = {opt.query_folder: query_dataset, opt.gallery_folder: gallery_dataset}
     dataloaders = {
-        'query_satellite': torch.utils.data.DataLoader(query_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16),
-        'gallery_drone': torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16)
+        opt.query_folder: torch.utils.data.DataLoader(query_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16),
+        opt.gallery_folder: torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16)
     }
 
 use_gpu = torch.cuda.is_available()
@@ -282,11 +297,9 @@ if use_gpu:
 # Extract feature
 since = time.time()
 
-#gallery_name = 'gallery_street' 
-#query_name = 'query_satellite' 
-
-gallery_name = 'gallery_drone'
-query_name = 'query_satellite'
+# Use the folder names from arguments
+gallery_name = opt.gallery_folder
+query_name = opt.query_folder
 
 which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
@@ -296,10 +309,13 @@ gallery_path = image_datasets[gallery_name].samples  # For CVUSA dataset
 f = open('gallery_name.txt','w')
 for p in gallery_path:
     f.write(p[0]+'\n')
+f.close()
+
 query_path = image_datasets[query_name].samples  # For CVUSA dataset
 f = open('query_name.txt','w')
 for p in query_path:
     f.write(p[0]+'\n')
+f.close()
 
 gallery_label, gallery_path  = get_id(gallery_path)
 query_label, query_path  = get_id(query_path)
