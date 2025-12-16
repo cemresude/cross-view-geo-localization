@@ -47,8 +47,8 @@ parser.add_argument('--multi', action='store_true', help='use multiple query' )
 parser.add_argument('--use_rgbd', action='store_true', help='use RGBD satellite images')
 parser.add_argument('--fp16', action='store_true', help='use fp16.' )
 parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,1.1  1,1.1,1.2')
-parser.add_argument('--query_folder', default='satellite', type=str, help='query folder name (satellite for CVUSA)')
-parser.add_argument('--gallery_folder', default='streetview', type=str, help='gallery folder name (streetview for CVUSA)')
+parser.add_argument('--query_folder', default='query_satellite', type=str, help='query folder name (query_satellite for University1652, satellite for CVUSA)')
+parser.add_argument('--gallery_folder', default='gallery_drone', type=str, help='gallery folder name (gallery_drone for University1652, streetview for CVUSA)')
 
 opt = parser.parse_args()
 ###load config###
