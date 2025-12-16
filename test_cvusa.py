@@ -217,7 +217,12 @@ def which_view(name):
     elif 'street' in name:
         return 2
     elif 'drone' in name:
-        return 3
+        # For 2-view model (satellite+drone), drone is view 2
+        # For 3-view model (satellite+street+drone), drone is view 3
+        if opt.views == 2:
+            return 2
+        else:
+            return 3
     else:
         print('unknown view')
     return -1
