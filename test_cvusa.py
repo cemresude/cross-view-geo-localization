@@ -19,7 +19,7 @@ import yaml
 import math
 from model import ft_net, two_view_net, three_view_net
 from model_rgbd import two_view_net_rgbd
-from dataset_rgbd import RGBDSatelliteDataset
+from dataset_rgbd import CVUSADataset, CVUSARGBDDataset
 from utils import load_network
 
 #fp16
@@ -119,21 +119,32 @@ if opt.PCB:
 data_dir = test_dir
 
 if opt.multi:
+    # For University1652 dataset
     image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
+    # For CVUSA dataset
     if opt.use_rgbd:
-        query_dataset = RGBDSatelliteDataset(
+        print("🌈 Using RGBD dataset for CVUSA query satellite")
+        query_dataset = CVUSARGBDDataset(
             rgb_folder=os.path.join(data_dir, 'query_satellite'),
             depth_folder=os.path.join(data_dir, 'query_satellite_depth'),
             transform=data_transforms
         )
     else:
-        query_dataset = datasets.ImageFolder(os.path.join(data_dir, 'query_satellite'), data_transforms)
+        print("🔵 Using RGB dataset for CVUSA query satellite")
+        query_dataset = CVUSADataset(
+            folder=os.path.join(data_dir, 'query_satellite'),
+            transform=data_transforms
+        )
     
     # Gallery: Drone (always RGB)
-    gallery_dataset = datasets.ImageFolder(os.path.join(data_dir, 'gallery_drone'), data_transforms)
+    print("🚁 Loading CVUSA gallery drone")
+    gallery_dataset = CVUSADataset(
+        folder=os.path.join(data_dir, 'gallery_drone'),
+        transform=data_transforms
+    )
     
     image_datasets = {'query_satellite': query_dataset, 'gallery_drone': gallery_dataset}
     dataloaders = {
@@ -169,34 +180,59 @@ def which_view(name):
 def extract_feature(model,dataloaders, view_index = 1):
     features = torch.FloatTensor()
     count = 0
+    
+    # Determine feature dimension based on model type
+    if opt.use_vgg16:
+        feature_dim = 512
+    else:
+        feature_dim = 2048
+    
+    if opt.pool == 'avg+max':
+        feature_dim = feature_dim * 2
+    
+    print(f"📊 Using feature dimension: {feature_dim}")
+    
     for data in dataloaders:
         img, label = data
         n, c, h, w = img.size()
         count += n
         print(count)
-        ff = torch.FloatTensor(n,512).zero_().cuda()
+        
+        # Initialize feature tensor with correct dimension
+        ff = torch.FloatTensor(n, feature_dim).zero_().cuda()
 
         for i in range(2):
             if(i==1):
                 img = fliplr(img)
             input_img = Variable(img.cuda())
+            
             for scale in ms:
                 if scale != 1:
                     # bicubic is only  available in pytorch>= 1.1
                     input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bilinear', align_corners=False)
-                if opt.views ==2:
+                
+                # Extract features based on view
+                outputs = None  # Initialize outputs to avoid UnboundLocalError
+                
+                if opt.views == 2:
                     if view_index == 1:
                         outputs, _ = model(input_img, None) 
-                    elif view_index ==2:
-                        _, outputs = model(None, input_img) 
-                elif opt.views ==3:
+                    elif view_index == 2:
+                        _, outputs = model(None, input_img)
+                elif opt.views == 3:
                     if view_index == 1:
                         outputs, _, _ = model(input_img, None, None)
-                    elif view_index ==2:
+                    elif view_index == 2:
                         _, outputs, _ = model(None, input_img, None)
-                    elif view_index ==3:
+                    elif view_index == 3:
                         _, _, outputs = model(None, None, input_img)
-                ff += outputs
+                
+                # Only add if outputs is valid
+                if outputs is not None:
+                    ff += outputs
+                else:
+                    raise ValueError(f"outputs is None for view_index={view_index}, views={opt.views}")
+        
         # norm feature
         if opt.PCB:
             # feature size (n,2048,6)
@@ -217,8 +253,10 @@ def get_id(img_path):
     labels = []
     paths = []
     for path, v in img_path:
-        folder_name = os.path.basename(os.path.dirname(path))
-        labels.append(int(folder_name))
+        # For CVUSA: extract ID from filename
+        filename = os.path.basename(path)
+        file_id = filename.split('.')[0]
+        labels.append(int(file_id) if file_id.isdigit() else v)
         paths.append(path)
     return labels, paths
 
@@ -226,7 +264,15 @@ def get_id(img_path):
 # Load Collected data Trained model
 print('-------test-----------')
 
-model, _, epoch = load_network(opt.name, opt)
+# Load model with RGBD support
+if opt.use_rgbd:
+    print("🌈 Loading RGBD model")
+    model = two_view_net_rgbd(opt.nclasses, droprate=0.5, stride=opt.stride, pool=opt.pool, share_weight=False)
+    # Load weights
+    model, _, epoch = load_network(opt.name, opt)
+else:
+    model, _, epoch = load_network(opt.name, opt)
+
 model.classifier.classifier = nn.Sequential()
 model = model.eval()
 print(model)
@@ -246,11 +292,11 @@ which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
 print('%d -> %d:'%(which_query, which_gallery))
 
-gallery_path = image_datasets[gallery_name].imgs
+gallery_path = image_datasets[gallery_name].samples  # For CVUSA dataset
 f = open('gallery_name.txt','w')
 for p in gallery_path:
     f.write(p[0]+'\n')
-query_path = image_datasets[query_name].imgs
+query_path = image_datasets[query_name].samples  # For CVUSA dataset
 f = open('query_name.txt','w')
 for p in query_path:
     f.write(p[0]+'\n')
@@ -267,7 +313,7 @@ if __name__ == "__main__":
     '''
     if which_query == 2:
         new_query_label = np.unique(query_label)
-        new_query_feature = torch.FloatTensor(len(new_query_label) ,512).zero_()
+        new_query_feature = torch.FloatTensor(len(new_query_label) ,feature_dim).zero_()
         for i, query_index in enumerate(new_query_label):
             new_query_feature[i,:] = torch.sum(query_feature[query_label == query_index, :], dim=0)
         query_feature = new_query_feature
@@ -276,7 +322,7 @@ if __name__ == "__main__":
         query_label   = new_query_label
     elif which_gallery == 2:
         new_gallery_label = np.unique(gallery_label)
-        new_gallery_feature = torch.FloatTensor(len(new_gallery_label), 512).zero_()
+        new_gallery_feature = torch.FloatTensor(len(new_gallery_label), feature_dim).zero_()
         for i, gallery_index in enumerate(new_gallery_label):
             new_gallery_feature[i,:] = torch.sum(gallery_feature[gallery_label == gallery_index, :], dim=0)
         gallery_feature = new_gallery_feature
@@ -295,4 +341,3 @@ if __name__ == "__main__":
     print(opt.name)
     result = './model/%s/result.txt'%opt.name
     os.system('python evaluate_gpu.py | tee -a %s'%result)
-
