@@ -231,27 +231,14 @@ def extract_feature(model,dataloaders, view_index = 1):
     features = torch.FloatTensor()
     count = 0
     
-    # Determine feature dimension based on model type
-    if opt.use_vgg16:
-        feature_dim = 512
-    else:
-        feature_dim = 2048
-    
-    if opt.pool == 'avg+max':
-        feature_dim = feature_dim * 2
-    
-    print(f"📊 Using feature dimension: {feature_dim}")
-    
     for data in dataloaders:
         img, label = data
         n, c, h, w = img.size()
         count += n
         print(count)
         
-        # Initialize feature tensor with correct dimension - moved inside loop for safety
-        ff = torch.FloatTensor(n, feature_dim).zero_()
-        if use_gpu:
-            ff = ff.cuda()
+        # Initialize ff as None - will be set after first forward pass
+        ff = None
 
         for i in range(2):
             if(i==1):
@@ -279,11 +266,19 @@ def extract_feature(model,dataloaders, view_index = 1):
                     elif view_index == 3:
                         _, _, outputs = model(None, None, input_img)
                 
-                # Only add if outputs is valid
-                if outputs is not None:
-                    ff += outputs
-                else:
+                # Check if outputs is valid
+                if outputs is None:
                     raise ValueError(f"outputs is None for view_index={view_index}, views={opt.views}")
+                
+                # Initialize ff on first forward pass with correct dimension
+                if ff is None:
+                    feature_dim = outputs.size(1)
+                    print(f"📊 Detected feature dimension: {feature_dim}")
+                    ff = torch.zeros(n, feature_dim)
+                    if use_gpu:
+                        ff = ff.cuda()
+                
+                ff += outputs
         
         # norm feature
         if opt.PCB:
