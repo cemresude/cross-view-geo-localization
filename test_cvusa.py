@@ -248,13 +248,15 @@ def extract_feature(model,dataloaders, view_index = 1):
         count += n
         print(count)
         
-        # Initialize feature tensor with correct dimension
-        ff = torch.FloatTensor(n, feature_dim).zero_().cuda()
+        # Initialize feature tensor with correct dimension - moved inside loop for safety
+        ff = torch.FloatTensor(n, feature_dim).zero_()
+        if use_gpu:
+            ff = ff.cuda()
 
         for i in range(2):
             if(i==1):
                 img = fliplr(img)
-            input_img = Variable(img.cuda())
+            input_img = Variable(img.cuda()) if use_gpu else Variable(img)
             
             for scale in ms:
                 if scale != 1:
