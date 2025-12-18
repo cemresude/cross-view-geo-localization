@@ -218,7 +218,7 @@ def find_model_path(model_name, which_epoch='last'):
     return pth_files[0]
 
 
-def load_model(model_name, use_rgbd=False, num_classes=701, which_epoch='last'):
+def load_model(model_name, use_rgbd=False, num_classes=701, which_epoch='last', droprate=0.5, stride=2):
     """
     Load trained model
     
@@ -227,6 +227,8 @@ def load_model(model_name, use_rgbd=False, num_classes=701, which_epoch='last'):
         use_rgbd: Use RGBD model architecture
         num_classes: Number of output classes
         which_epoch: 'last', 'best', or specific epoch number
+        droprate: Dropout rate (default 0.5)
+        stride: Stride for model (default 2)
     
     Returns:
         model: Loaded PyTorch model
@@ -234,11 +236,11 @@ def load_model(model_name, use_rgbd=False, num_classes=701, which_epoch='last'):
     model_path = find_model_path(model_name, which_epoch)
     print(f"📂 Loading model from: {model_path}")
     
-    # Initialize model
+    # Initialize model with required parameters
     if use_rgbd:
-        model = two_view_net_rgbd(num_classes)
+        model = two_view_net_rgbd(num_classes, droprate=droprate, stride=stride)
     else:
-        model = two_view_net(num_classes)
+        model = two_view_net(num_classes, droprate=droprate, stride=stride)
     
     # Load weights
     state_dict = torch.load(model_path, map_location='cpu')
