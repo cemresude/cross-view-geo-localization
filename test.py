@@ -152,7 +152,9 @@ def extract_feature(model,dataloaders, view_index = 1):
         n, c, h, w = img.size()
         count += n
         print(count)
-        ff = torch.FloatTensor(n,512).zero_().cuda()
+        
+        # Initialize ff as None - will be set after first forward pass
+        ff = None
 
         for i in range(2):
             if(i==1):
@@ -162,6 +164,9 @@ def extract_feature(model,dataloaders, view_index = 1):
                 if scale != 1:
                     # bicubic is only  available in pytorch>= 1.1
                     input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bilinear', align_corners=False)
+                
+                # Extract features based on view
+                outputs = None
                 if opt.views ==2:
                     if view_index == 1:
                         outputs, _ = model(input_img, None) 
@@ -174,6 +179,17 @@ def extract_feature(model,dataloaders, view_index = 1):
                         _, outputs, _ = model(None, input_img, None)
                     elif view_index ==3:
                         _, _, outputs = model(None, None, input_img)
+                
+                # Check if outputs is valid
+                if outputs is None:
+                    raise ValueError(f"outputs is None for view_index={view_index}, views={opt.views}")
+                
+                # Initialize ff on first forward pass with correct dimension
+                if ff is None:
+                    feature_dim = outputs.size(1)
+                    print(f"📊 Detected feature dimension: {feature_dim}")
+                    ff = torch.zeros(n, feature_dim).cuda()
+                
                 ff += outputs
         # norm feature
         if opt.PCB:
