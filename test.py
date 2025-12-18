@@ -40,6 +40,9 @@ parser.add_argument('--multi', action='store_true', help='use multiple query' )
 parser.add_argument('--fp16', action='store_true', help='use fp16.' )
 parser.add_argument('--bf16', action='store_true', help='use bf16.' )
 parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,1.1  1,1.1,1.2')
+parser.add_argument('--use_rgbd', action='store_true', help='use RGBD for satellite images')
+parser.add_argument('--query_folder', default='query_satellite', type=str, help='query folder name')
+parser.add_argument('--gallery_folder', default='gallery_drone', type=str, help='gallery folder name')
 
 opt = parser.parse_args()
 ###load config###
@@ -210,15 +213,9 @@ if use_gpu:
 # Extract feature
 since = time.time()
 
-#gallery_name = 'gallery_street' 
-query_name = 'query_satellite' 
-
-#gallery_name = 'gallery_satellite'
-#query_name = 'query_street'
-
-#gallery_name = 'gallery_street'
-#query_name = 'query_drone'
-gallery_name = 'gallery_drone'
+# Use command line arguments for query and gallery folders
+query_name = opt.query_folder
+gallery_name = opt.gallery_folder
 
 which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
