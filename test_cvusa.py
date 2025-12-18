@@ -56,12 +56,12 @@ opt = parser.parse_args()
 config_path = os.path.join('./model',opt.name,'opts.yaml')
 with open(config_path, 'r') as stream:
         config = yaml.load(stream, Loader=yaml.FullLoader)
-opt.fp16 = config['fp16'] 
-opt.use_dense = config['use_dense']
-opt.use_NAS = config['use_NAS']
-opt.use_vgg16 = config['use_vgg16']
-opt.stride = config['stride']
-opt.views = config['views']
+opt.fp16 = config.get('fp16', False)
+opt.use_dense = config.get('use_dense', False)
+opt.use_NAS = config.get('use_NAS', False)
+opt.use_vgg16 = config.get('use_vgg16', False)
+opt.stride = config.get('stride', 2)
+opt.views = config.get('views', 2)
 
 if 'h' in config:
     opt.h = config['h']
