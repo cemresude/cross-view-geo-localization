@@ -233,26 +233,42 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
             running_corrects2 = 0.0
             running_corrects3 = 0.0
             # Iterate over data.
-            for data, data2, data3, data4 in zip(dataloaders['satellite'], dataloaders['street'], dataloaders['drone'],
-                                                 dataloaders['google']):
-                # get the inputs
-                inputs, labels = data
-                inputs2, labels2 = data2
-                inputs3, labels3 = data3
-                inputs4, labels4 = data4
+            # For 2-view: satellite + drone (skip street)
+            # For 3-view: satellite + street + drone
+            if opt.views == 2:
+                data_iterator = zip(dataloaders['satellite'], dataloaders['drone'])
+            else:
+                data_iterator = zip(dataloaders['satellite'], dataloaders['street'], dataloaders['drone'],
+                                   dataloaders['google'])
+            
+            for batch_data in data_iterator:
+                if opt.views == 2:
+                    data, data2 = batch_data
+                    inputs, labels = data
+                    inputs2, labels2 = data2
+                    inputs3, labels3 = None, None
+                    inputs4, labels4 = None, None
+                else:
+                    data, data2, data3, data4 = batch_data
+                    inputs, labels = data
+                    inputs2, labels2 = data2
+                    inputs3, labels3 = data3
+                    inputs4, labels4 = data4
+                
                 now_batch_size, c, h, w = inputs.shape
                 if now_batch_size < opt.batchsize:  # skip the last batch
                     continue
                 if use_gpu:
                     inputs = Variable(inputs.cuda().detach())
                     inputs2 = Variable(inputs2.cuda().detach())
-                    inputs3 = Variable(inputs3.cuda().detach())
                     labels = Variable(labels.cuda().detach())
                     labels2 = Variable(labels2.cuda().detach())
-                    labels3 = Variable(labels3.cuda().detach())
-                    if opt.extra_Google:
-                        inputs4 = Variable(inputs4.cuda().detach())
-                        labels4 = Variable(labels4.cuda().detach())
+                    if opt.views == 3:
+                        inputs3 = Variable(inputs3.cuda().detach())
+                        labels3 = Variable(labels3.cuda().detach())
+                        if opt.extra_Google:
+                            inputs4 = Variable(inputs4.cuda().detach())
+                            labels4 = Variable(labels4.cuda().detach())
                 else:
                     inputs, labels = Variable(inputs), Variable(labels)
 
