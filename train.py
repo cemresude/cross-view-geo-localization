@@ -155,19 +155,32 @@ if opt.train_all:
 image_datasets = {}
 image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
                                                    data_transforms['satellite'])
-image_datasets['street'] = datasets.ImageFolder(os.path.join(data_dir, 'street'),
-                                                data_transforms['train'])
 image_datasets['drone'] = datasets.ImageFolder(os.path.join(data_dir, 'drone'),
                                                data_transforms['train'])
-image_datasets['google'] = ImageFolder(os.path.join(data_dir, 'google'),
-                                       # google contain empty subfolder, so we overwrite the Folder
-                                       data_transforms['train'])
+
+# Load street and google only for 3-view model
+if opt.views == 3:
+    image_datasets['street'] = datasets.ImageFolder(os.path.join(data_dir, 'street'),
+                                                    data_transforms['train'])
+    if opt.extra_Google:
+        image_datasets['google'] = ImageFolder(os.path.join(data_dir, 'google'),
+                                               data_transforms['train'])
+
+# Create dataloaders based on views
+if opt.views == 2:
+    dataset_list = ['satellite', 'drone']
+    print('📊 Training 2-view model: satellite + drone')
+else:
+    dataset_list = ['satellite', 'street', 'drone']
+    if opt.extra_Google:
+        dataset_list.append('google')
+    print('📊 Training 3-view model: satellite + street + drone' + (' + google' if opt.extra_Google else ''))
 
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                              shuffle=True, num_workers=2, pin_memory=True)  # 8 workers may work faster
-               for x in ['satellite', 'street', 'drone', 'google']}
-dataset_sizes = {x: len(image_datasets[x]) for x in ['satellite', 'street', 'drone', 'google']}
-class_names = image_datasets['street'].classes
+                                              shuffle=True, num_workers=2, pin_memory=True)
+               for x in dataset_list}
+dataset_sizes = {x: len(image_datasets[x]) for x in dataset_list}
+class_names = image_datasets['drone'].classes
 print(dataset_sizes)
 use_gpu = torch.cuda.is_available()
 
@@ -234,12 +247,14 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
             running_corrects3 = 0.0
             # Iterate over data.
             # For 2-view: satellite + drone (skip street)
-            # For 3-view: satellite + street + drone
+            # For 3-view: satellite + street + drone (+ google if extra_Google)
             if opt.views == 2:
                 data_iterator = zip(dataloaders['satellite'], dataloaders['drone'])
-            else:
+            elif opt.extra_Google:
                 data_iterator = zip(dataloaders['satellite'], dataloaders['street'], dataloaders['drone'],
                                    dataloaders['google'])
+            else:
+                data_iterator = zip(dataloaders['satellite'], dataloaders['street'], dataloaders['drone'])
             
             for batch_data in data_iterator:
                 if opt.views == 2:
@@ -248,12 +263,19 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
                     inputs2, labels2 = data2
                     inputs3, labels3 = None, None
                     inputs4, labels4 = None, None
-                else:
+                elif opt.extra_Google:
                     data, data2, data3, data4 = batch_data
                     inputs, labels = data
                     inputs2, labels2 = data2
                     inputs3, labels3 = data3
                     inputs4, labels4 = data4
+                else:
+                    # 3-view without google
+                    data, data2, data3 = batch_data
+                    inputs, labels = data
+                    inputs2, labels2 = data2
+                    inputs3, labels3 = data3
+                    inputs4, labels4 = None, None
                 
                 now_batch_size, c, h, w = inputs.shape
                 if now_batch_size < opt.batchsize:  # skip the last batch
@@ -433,7 +455,7 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
             epoch_acc2 = running_corrects2 / dataset_sizes['satellite']
 
             if opt.views == 2:
-                print('{} Loss: {:.4f} Satellite_Acc: {:.4f}  Street_Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc,
+                print('{} Loss: {:.4f} Satellite_Acc: {:.4f}  Drone_Acc: {:.4f}'.format(phase, epoch_loss, epoch_acc,
                                                                                          epoch_acc2))
             elif opt.views == 3:
                 epoch_acc3 = running_corrects3 / dataset_sizes['satellite']

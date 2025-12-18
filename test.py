@@ -50,11 +50,14 @@ opt = parser.parse_args()
 config_path = os.path.join('./model',opt.name,'opts.yaml')
 with open(config_path, 'r') as stream:
         config = yaml.load(stream, Loader=yaml.FullLoader)
-opt.fp16 = config['fp16'] 
-opt.use_dense = config['use_dense']
-opt.use_NAS = config['use_NAS']
-opt.stride = config['stride']
-opt.views = config['views']
+
+# Use .get() with defaults for compatibility with old config files
+opt.fp16 = config.get('fp16', False)
+opt.use_dense = config.get('use_dense', False)
+opt.use_NAS = config.get('use_NAS', False)
+opt.stride = config.get('stride', 2)
+opt.views = config.get('views', 2)
+opt.use_vgg16 = config.get('use_vgg16', False)
 
 if 'h' in config:
     opt.h = config['h']
@@ -116,9 +119,19 @@ if opt.multi:
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
 else:
-    image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery_satellite','gallery_drone', 'gallery_street', 'query_satellite', 'query_drone', 'query_street']}
+    # Dynamically load only the datasets that exist
+    possible_datasets = ['gallery_satellite', 'gallery_drone', 'gallery_street', 
+                         'query_satellite', 'query_drone', 'query_street']
+    available_datasets = []
+    for x in possible_datasets:
+        dataset_path = os.path.join(data_dir, x)
+        if os.path.exists(dataset_path):
+            available_datasets.append(x)
+    
+    print(f"📂 Found datasets: {available_datasets}")
+    image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x), data_transforms) for x in available_datasets}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['gallery_satellite', 'gallery_drone','gallery_street', 'query_satellite', 'query_drone', 'query_street']}
+                                             shuffle=False, num_workers=16) for x in available_datasets}
 use_gpu = torch.cuda.is_available()
 
 ######################################################################
