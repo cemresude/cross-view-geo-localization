@@ -69,6 +69,10 @@ class GradCAM:
         """
         self.model.eval()
         
+        # Move input to same device as model
+        device = next(self.model.parameters()).device
+        input_tensor = input_tensor.to(device)
+        
         # Forward pass
         output = self.model(input_tensor, input_tensor)[0]  # Two-view model
         
@@ -112,6 +116,10 @@ class GradCAMPlusPlus(GradCAM):
         """Generate Grad-CAM++ heatmap with improved localization"""
         self.model.eval()
         
+        # Move input to same device as model
+        device = next(self.model.parameters()).device
+        input_tensor = input_tensor.to(device)
+        
         # Forward pass
         output = self.model(input_tensor, input_tensor)[0]
         
@@ -148,12 +156,83 @@ class GradCAMPlusPlus(GradCAM):
         return cam.cpu().numpy()
 
 
-def load_model(model_name, use_rgbd=False, num_classes=701):
-    """Load trained model"""
-    model_path = os.path.join('./model', model_name, 'net_last.pth')
+def find_model_path(model_name, which_epoch='last'):
+    """
+    Dynamically find model .pth file
     
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_path}")
+    Args:
+        model_name: Model directory name
+        which_epoch: 'last', 'best', or specific epoch number
+    
+    Returns:
+        model_path: Path to .pth file
+    """
+    import glob
+    import re
+    
+    model_dir = os.path.join('./model', model_name)
+    
+    if not os.path.exists(model_dir):
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+    
+    # Try specific filenames first
+    if which_epoch == 'last':
+        candidates = ['net_last.pth', 'net.pth']
+        for candidate in candidates:
+            path = os.path.join(model_dir, candidate)
+            if os.path.exists(path):
+                return path
+    elif which_epoch == 'best':
+        path = os.path.join(model_dir, 'net_best.pth')
+        if os.path.exists(path):
+            return path
+    elif which_epoch.isdigit():
+        path = os.path.join(model_dir, f'net_{which_epoch}.pth')
+        if os.path.exists(path):
+            return path
+    
+    # Find all .pth files and get the latest one
+    pth_files = glob.glob(os.path.join(model_dir, 'net_*.pth'))
+    
+    if not pth_files:
+        # Try any .pth file
+        pth_files = glob.glob(os.path.join(model_dir, '*.pth'))
+    
+    if not pth_files:
+        raise FileNotFoundError(f"No .pth files found in: {model_dir}")
+    
+    # Extract epoch numbers and find the highest
+    epoch_files = []
+    for f in pth_files:
+        basename = os.path.basename(f)
+        match = re.search(r'net_(\d+)\.pth', basename)
+        if match:
+            epoch_files.append((int(match.group(1)), f))
+    
+    if epoch_files:
+        # Sort by epoch number and return highest
+        epoch_files.sort(key=lambda x: x[0], reverse=True)
+        return epoch_files[0][1]
+    
+    # Return first available .pth file
+    return pth_files[0]
+
+
+def load_model(model_name, use_rgbd=False, num_classes=701, which_epoch='last'):
+    """
+    Load trained model
+    
+    Args:
+        model_name: Model directory name
+        use_rgbd: Use RGBD model architecture
+        num_classes: Number of output classes
+        which_epoch: 'last', 'best', or specific epoch number
+    
+    Returns:
+        model: Loaded PyTorch model
+    """
+    model_path = find_model_path(model_name, which_epoch)
+    print(f"📂 Loading model from: {model_path}")
     
     # Initialize model
     if use_rgbd:
@@ -162,8 +241,25 @@ def load_model(model_name, use_rgbd=False, num_classes=701):
         model = two_view_net(num_classes)
     
     # Load weights
-    model.load_state_dict(torch.load(model_path))
+    state_dict = torch.load(model_path, map_location='cpu')
+    
+    # Handle different state_dict formats
+    if 'state_dict' in state_dict:
+        state_dict = state_dict['state_dict']
+    
+    # Remove 'module.' prefix if present (from DataParallel)
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            new_state_dict[k[7:]] = v
+        else:
+            new_state_dict[k] = v
+    
+    model.load_state_dict(new_state_dict, strict=False)
     model.eval()
+    
+    if torch.cuda.is_available():
+        model = model.cuda()
     
     return model
 
@@ -420,6 +516,7 @@ def main():
     parser.add_argument('--method', default='gradcam', choices=['gradcam', 'gradcam++'], help='CAM method')
     parser.add_argument('--output_dir', default='gradcam_results', type=str, help='Output directory')
     parser.add_argument('--num_classes', default=701, type=int, help='Number of classes')
+    parser.add_argument('--which_epoch', default='last', type=str, help='Which epoch to load (last, best, or epoch number)')
     
     args = parser.parse_args()
     
@@ -430,11 +527,12 @@ def main():
     print(f"Mode: {'RGBD' if args.use_rgbd else 'RGB-only'}")
     print(f"Method: {args.method.upper()}")
     print(f"Image: {args.image_path}")
+    print(f"Epoch: {args.which_epoch}")
     print("=" * 60)
     
     # Load model
     print("\n📦 Loading model...")
-    model = load_model(args.model_name, args.use_rgbd, args.num_classes)
+    model = load_model(args.model_name, args.use_rgbd, args.num_classes, args.which_epoch)
     print("✅ Model loaded successfully!")
     
     # Generate visualization
