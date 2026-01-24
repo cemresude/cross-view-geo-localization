@@ -38,7 +38,7 @@ class RGBDDataset(Dataset):
     
     Directory structure expected:
         rgb_root/class_id/image.jpg
-        depth_root/class_id/image.png  (MiDaS depth map)
+        depth_root/class_id/image.jpeg  (MiDaS depth map)
     """
     def __init__(self, rgb_root, depth_root, transform_rgb=None, transform_depth=None):
         """
@@ -67,18 +67,20 @@ class RGBDDataset(Dataset):
         # Get relative path from rgb_root
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
         
-        # Change extension to .png (MiDaS saves as PNG)
-        base, _ = os.path.splitext(rel_path)
-        depth_rel_path = base + '.png'
+        # Get base name without extension
+        base, ext = os.path.splitext(rel_path)
         
-        # Construct full depth path
-        depth_path = os.path.join(self.depth_root, depth_rel_path)
+        # Try different extensions for depth maps
+        possible_extensions = ['.png', '.jpg', '.jpeg', ext]
         
-        # If .png doesn't exist, try with original extension
-        if not os.path.exists(depth_path):
-            depth_path = os.path.join(self.depth_root, rel_path)
+        for depth_ext in possible_extensions:
+            depth_rel_path = base + depth_ext
+            depth_path = os.path.join(self.depth_root, depth_rel_path)
+            if os.path.exists(depth_path):
+                return depth_path
         
-        return depth_path
+        # Return default .png path if none found
+        return os.path.join(self.depth_root, base + '.png')
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
@@ -438,7 +440,7 @@ def main():
     parser.add_argument('--rgb_model', required=True, type=str, help='RGB model name')
     parser.add_argument('--rgbd_model', required=True, type=str, help='RGBD model name')
     parser.add_argument('--test_dir', default='./data/test', type=str, help='Test data directory')
-    parser.add_argument('--depth_dir', default='./data/test_depth', type=str, help='MiDaS depth maps directory')
+    parser.add_argument('--depth_dir', default='/content/cvpr2017_cvusa_depth/test', type=str, help='MiDaS depth maps directory')
     parser.add_argument('--output_dir', default='./rgbd_improvement_results', type=str)
     parser.add_argument('--num_classes', default=701, type=int, help='Number of classes')
     parser.add_argument('--which_epoch', default='last', type=str)
@@ -622,7 +624,7 @@ def main():
             correct_gallery_path = gallery_paths[correct_gallery_idx] if correct_gallery_idx else rgbd_top1_path
             
             # Generate visualization
-            save_path = os.path.join(args.output_dir, f'improvement_{i+1:03d}_label{query_label}.png')
+            save_path = os.path.join(args.output_dir, f'improvement_{i+1:03d}_label{query_label}.jpeg')
             
             try:
                 visualize_improvement_case(
@@ -632,7 +634,7 @@ def main():
                 )
                 
                 # Also save attention difference
-                diff_save_path = os.path.join(args.output_dir, f'attention_diff_{i+1:03d}_label{queryLabel}.png')
+                diff_save_path = os.path.join(args.output_dir, f'attention_diff_{i+1:03d}_label{queryLabel}.jpeg')
                 attention_difference_visualization(rgb_model, rgbd_model, query_img_path, diff_save_path)
                 
             except Exception as e:
