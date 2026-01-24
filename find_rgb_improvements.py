@@ -143,6 +143,11 @@ def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, i
             if use_gpu:
                 img = img.cuda()
             
+            if view_index == 2:
+                # model_2 (Drone) sadece 3 kanal bekliyor. 
+                # RGBD verisindeki ilk 3 kanalı (RGB) alıyoruz, 4. kanalı (Depth) atıyoruz.
+                img = img[:, :3, :, :]
+            # --- KRİTİK DÜZELTME BİTİŞİ ---
             # Forward pass
             if view_index == 1:
                 outputs, _ = model(img, None)
