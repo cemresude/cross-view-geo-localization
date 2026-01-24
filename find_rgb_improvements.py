@@ -452,6 +452,8 @@ def main():
     parser.add_argument('--max_visualize', default=20, type=int, help='Max cases to visualize')
     parser.add_argument('--query_folder', default='query_satellite', type=str)
     parser.add_argument('--gallery_folder', default='gallery_drone', type=str)
+    parser.add_argument('--query_depth_folder', default='satellite_depth', type=str, help='Depth folder for query (satellite_depth)')
+    parser.add_argument('--gallery_depth_folder', default='drone_depth', type=str, help='Depth folder for gallery (drone_depth)')
     parser.add_argument('--batchsize', default=32, type=int)
     
     args = parser.parse_args()
@@ -484,10 +486,14 @@ def main():
     # Paths
     query_rgb_path = os.path.join(args.test_dir, args.query_folder)
     gallery_rgb_path = os.path.join(args.test_dir, args.gallery_folder)
-    query_depth_path = os.path.join(args.depth_dir, args.query_folder)
-    gallery_depth_path = os.path.join(args.depth_dir, args.gallery_folder)
+    query_depth_path = os.path.join(args.depth_dir, args.query_depth_folder)
+    gallery_depth_path = os.path.join(args.depth_dir, args.gallery_depth_folder)
     
     print(f"\n📂 Loading datasets...")
+    print(f"  Query RGB path: {query_rgb_path}")
+    print(f"  Gallery RGB path: {gallery_rgb_path}")
+    print(f"  Query Depth path: {query_depth_path}")
+    print(f"  Gallery Depth path: {gallery_depth_path}")
     
     # RGB datasets (for RGB model)
     query_dataset_rgb = datasets.ImageFolder(query_rgb_path, transform_rgb)
