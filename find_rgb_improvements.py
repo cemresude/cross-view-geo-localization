@@ -67,20 +67,27 @@ class RGBDDataset(Dataset):
         # Get relative path from rgb_root
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
         
-        # Get base name without extension
-        base, ext = os.path.splitext(rel_path)
+        # Get directory (class_id) and filename
+        dir_name = os.path.dirname(rel_path)  # e.g., "0310"
         
-        # Try different extensions for depth maps
-        possible_extensions = ['.png', '.jpg', '.jpeg', ext]
+        # Depth files are named after class_id, not image-XX
+        # Try different extensions: class_id/class_id.ext
+        possible_extensions = ['.jpg', '.jpeg', '.png']
         
         for depth_ext in possible_extensions:
-            depth_rel_path = base + depth_ext
-            depth_path = os.path.join(self.depth_root, depth_rel_path)
+            # Pattern: depth_root/class_id/class_id.ext (e.g., drone_depth/0310/0310.jpg)
+            depth_path = os.path.join(self.depth_root, dir_name, dir_name + depth_ext)
             if os.path.exists(depth_path):
                 return depth_path
         
-        # Return default .png path if none found
-        return os.path.join(self.depth_root, base + '.jpeg')
+        # Fallback: try flat structure depth_root/class_id.ext
+        for depth_ext in possible_extensions:
+            depth_path = os.path.join(self.depth_root, dir_name + depth_ext)
+            if os.path.exists(depth_path):
+                return depth_path
+        
+        # Return default path for error message
+        return os.path.join(self.depth_root, dir_name, dir_name + '.jpg')
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
