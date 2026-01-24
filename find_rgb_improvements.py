@@ -80,7 +80,7 @@ class RGBDDataset(Dataset):
                 return depth_path
         
         # Return default .png path if none found
-        return os.path.join(self.depth_root, base + '.png')
+        return os.path.join(self.depth_root, base + '.jpeg')
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
