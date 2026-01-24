@@ -18,6 +18,7 @@ import scipy.io
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from PIL import Image
+from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 import cv2
 
@@ -30,9 +31,97 @@ from gradcam_visualization import (
 from utils import load_network
 
 
-def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True):
+class RGBDDataset(Dataset):
+    """
+    Custom Dataset for loading RGB images and corresponding MiDaS depth maps.
+    Concatenates RGB (3, H, W) and Depth (1, H, W) into RGBD (4, H, W).
+    
+    Directory structure expected:
+        rgb_root/class_id/image.jpg
+        depth_root/class_id/image.png  (MiDaS depth map)
+    """
+    def __init__(self, rgb_root, depth_root, transform_rgb=None, transform_depth=None):
+        """
+        Args:
+            rgb_root: Path to RGB images (ImageFolder structure)
+            depth_root: Path to MiDaS depth maps (same structure as rgb_root)
+            transform_rgb: Transforms for RGB images
+            transform_depth: Transforms for depth maps
+        """
+        self.rgb_root = rgb_root
+        self.depth_root = depth_root
+        self.transform_rgb = transform_rgb
+        self.transform_depth = transform_depth
+        
+        # Use ImageFolder to get the file structure
+        self.rgb_dataset = datasets.ImageFolder(rgb_root)
+        self.imgs = self.rgb_dataset.imgs  # List of (path, class_idx)
+        self.classes = self.rgb_dataset.classes
+        self.class_to_idx = self.rgb_dataset.class_to_idx
+        
+    def __len__(self):
+        return len(self.imgs)
+    
+    def _get_depth_path(self, rgb_path):
+        """Convert RGB image path to corresponding depth map path."""
+        # Get relative path from rgb_root
+        rel_path = os.path.relpath(rgb_path, self.rgb_root)
+        
+        # Change extension to .png (MiDaS saves as PNG)
+        base, _ = os.path.splitext(rel_path)
+        depth_rel_path = base + '.png'
+        
+        # Construct full depth path
+        depth_path = os.path.join(self.depth_root, depth_rel_path)
+        
+        # If .png doesn't exist, try with original extension
+        if not os.path.exists(depth_path):
+            depth_path = os.path.join(self.depth_root, rel_path)
+        
+        return depth_path
+    
+    def __getitem__(self, index):
+        rgb_path, label = self.imgs[index]
+        
+        # Load RGB image
+        rgb_img = Image.open(rgb_path).convert('RGB')
+        
+        # Load depth map
+        depth_path = self._get_depth_path(rgb_path)
+        if os.path.exists(depth_path):
+            depth_img = Image.open(depth_path).convert('L')  # Grayscale
+        else:
+            # Fallback: create zero depth if not found
+            depth_img = Image.new('L', rgb_img.size, 0)
+            print(f"Warning: Depth map not found: {depth_path}")
+        
+        # Apply transforms
+        if self.transform_rgb:
+            rgb_tensor = self.transform_rgb(rgb_img)
+        else:
+            rgb_tensor = transforms.ToTensor()(rgb_img)
+        
+        if self.transform_depth:
+            depth_tensor = self.transform_depth(depth_img)
+        else:
+            depth_tensor = transforms.ToTensor()(depth_img)
+        
+        # Concatenate RGB (3, H, W) + Depth (1, H, W) -> RGBD (4, H, W)
+        rgbd_tensor = torch.cat([rgb_tensor, depth_tensor], dim=0)
+        
+        return rgbd_tensor, label
+
+
+def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, is_rgbd=False):
     """
     Extract features and keep track of image paths
+    
+    Args:
+        model: The model to use for feature extraction
+        dataloader: DataLoader for the dataset
+        view_index: 1 for satellite/query, 2 for drone/gallery
+        use_gpu: Whether to use GPU
+        is_rgbd: Whether the input is 4-channel RGBD
     
     Returns:
         features: Feature tensor [N, D]
@@ -349,6 +438,7 @@ def main():
     parser.add_argument('--rgb_model', required=True, type=str, help='RGB model name')
     parser.add_argument('--rgbd_model', required=True, type=str, help='RGBD model name')
     parser.add_argument('--test_dir', default='./data/test', type=str, help='Test data directory')
+    parser.add_argument('--depth_dir', default='./data/test_depth', type=str, help='MiDaS depth maps directory')
     parser.add_argument('--output_dir', default='./rgbd_improvement_results', type=str)
     parser.add_argument('--num_classes', default=701, type=int, help='Number of classes')
     parser.add_argument('--which_epoch', default='last', type=str)
@@ -367,30 +457,63 @@ def main():
     print(f"RGB Model: {args.rgb_model}")
     print(f"RGBD Model: {args.rgbd_model}")
     print(f"Test Directory: {args.test_dir}")
+    print(f"Depth Directory: {args.depth_dir}")
     print("=" * 70)
     
-    # Data transforms
-    transform = transforms.Compose([
+    # Data transforms for RGB
+    transform_rgb = transforms.Compose([
         transforms.Resize((256, 256), interpolation=3),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     
-    # Load datasets
-    query_path = os.path.join(args.test_dir, args.query_folder)
-    gallery_path = os.path.join(args.test_dir, args.gallery_folder)
+    # Data transforms for Depth (single channel)
+    transform_depth = transforms.Compose([
+        transforms.Resize((256, 256), interpolation=3),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5])  # Normalize depth to [-1, 1]
+    ])
+    
+    # Paths
+    query_rgb_path = os.path.join(args.test_dir, args.query_folder)
+    gallery_rgb_path = os.path.join(args.test_dir, args.gallery_folder)
+    query_depth_path = os.path.join(args.depth_dir, args.query_folder)
+    gallery_depth_path = os.path.join(args.depth_dir, args.gallery_folder)
     
     print(f"\n📂 Loading datasets...")
-    query_dataset = datasets.ImageFolder(query_path, transform)
-    gallery_dataset = datasets.ImageFolder(gallery_path, transform)
     
-    query_loader = torch.utils.data.DataLoader(query_dataset, batch_size=args.batchsize,
-                                                shuffle=False, num_workers=4)
-    gallery_loader = torch.utils.data.DataLoader(gallery_dataset, batch_size=args.batchsize,
-                                                  shuffle=False, num_workers=4)
+    # RGB datasets (for RGB model)
+    query_dataset_rgb = datasets.ImageFolder(query_rgb_path, transform_rgb)
+    gallery_dataset_rgb = datasets.ImageFolder(gallery_rgb_path, transform_rgb)
     
-    print(f"  Query samples: {len(query_dataset)}")
-    print(f"  Gallery samples: {len(gallery_dataset)}")
+    query_loader_rgb = DataLoader(query_dataset_rgb, batch_size=args.batchsize,
+                                  shuffle=False, num_workers=4)
+    gallery_loader_rgb = DataLoader(gallery_dataset_rgb, batch_size=args.batchsize,
+                                    shuffle=False, num_workers=4)
+    
+    # RGBD datasets (for RGBD model)
+    query_dataset_rgbd = RGBDDataset(
+        rgb_root=query_rgb_path,
+        depth_root=query_depth_path,
+        transform_rgb=transform_rgb,
+        transform_depth=transform_depth
+    )
+    gallery_dataset_rgbd = RGBDDataset(
+        rgb_root=gallery_rgb_path,
+        depth_root=gallery_depth_path,
+        transform_rgb=transform_rgb,
+        transform_depth=transform_depth
+    )
+    
+    query_loader_rgbd = DataLoader(query_dataset_rgbd, batch_size=args.batchsize,
+                                   shuffle=False, num_workers=4)
+    gallery_loader_rgbd = DataLoader(gallery_dataset_rgbd, batch_size=args.batchsize,
+                                     shuffle=False, num_workers=4)
+    
+    print(f"  Query samples: {len(query_dataset_rgb)}")
+    print(f"  Gallery samples: {len(gallery_dataset_rgb)}")
+    print(f"  RGBD Query samples: {len(query_dataset_rgbd)}")
+    print(f"  RGBD Gallery samples: {len(gallery_dataset_rgbd)}")
     
     # Load models
     print(f"\n📦 Loading RGB model...")
@@ -399,7 +522,6 @@ def main():
     state_dict = torch.load(rgb_model_path, map_location='cpu')
     if 'state_dict' in state_dict:
         state_dict = state_dict['state_dict']
-    # Remove 'module.' prefix if present
     new_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
     rgb_model.load_state_dict(new_state_dict, strict=False)
     rgb_model.eval()
@@ -420,18 +542,19 @@ def main():
         rgbd_model = rgbd_model.cuda()
         print("✅ Using GPU")
     
-    # Extract features
+    # Extract features - RGB model uses RGB data
     print(f"\n🔄 Extracting features with RGB model...")
     rgb_query_features, query_labels, query_paths = extract_features_with_paths(
-        rgb_model, query_loader, view_index=1, use_gpu=use_gpu)
+        rgb_model, query_loader_rgb, view_index=1, use_gpu=use_gpu, is_rgbd=False)
     rgb_gallery_features, gallery_labels, gallery_paths = extract_features_with_paths(
-        rgb_model, gallery_loader, view_index=2, use_gpu=use_gpu)
+        rgb_model, gallery_loader_rgb, view_index=2, use_gpu=use_gpu, is_rgbd=False)
     
+    # Extract features - RGBD model uses RGBD data
     print(f"🔄 Extracting features with RGBD model...")
     rgbd_query_features, _, _ = extract_features_with_paths(
-        rgbd_model, query_loader, view_index=1, use_gpu=use_gpu)
+        rgbd_model, query_loader_rgbd, view_index=1, use_gpu=use_gpu, is_rgbd=True)
     rgbd_gallery_features, _, _ = extract_features_with_paths(
-        rgbd_model, gallery_loader, view_index=2, use_gpu=use_gpu)
+        rgbd_model, gallery_loader_rgbd, view_index=2, use_gpu=use_gpu, is_rgbd=True)
     
     # Compute rankings
     print(f"\n📊 Computing similarity rankings...")
@@ -509,7 +632,7 @@ def main():
                 )
                 
                 # Also save attention difference
-                diff_save_path = os.path.join(args.output_dir, f'attention_diff_{i+1:03d}_label{query_label}.png')
+                diff_save_path = os.path.join(args.output_dir, f'attention_diff_{i+1:03d}_label{queryLabel}.png')
                 attention_difference_visualization(rgb_model, rgbd_model, query_img_path, diff_save_path)
                 
             except Exception as e:
