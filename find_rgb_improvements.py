@@ -35,77 +35,88 @@ class RGBDDataset(Dataset):
     """
     Custom Dataset for loading RGB images and corresponding MiDaS depth maps.
     Concatenates RGB (3, H, W) and Depth (1, H, W) into RGBD (4, H, W).
-    
-    Directory structure expected:
-        rgb_root/class_id/image.jpg
-        depth_root/class_id/image.jpeg  (MiDaS depth map)
     """
     def __init__(self, rgb_root, depth_root, transform_rgb=None, transform_depth=None):
-        """
-        Args:
-            rgb_root: Path to RGB images (ImageFolder structure)
-            depth_root: Path to MiDaS depth maps (same structure as rgb_root)
-            transform_rgb: Transforms for RGB images
-            transform_depth: Transforms for depth maps
-        """
         self.rgb_root = rgb_root
         self.depth_root = depth_root
         self.transform_rgb = transform_rgb
         self.transform_depth = transform_depth
         
-        # Use ImageFolder to get the file structure
         self.rgb_dataset = datasets.ImageFolder(rgb_root)
-        self.imgs = self.rgb_dataset.imgs  # List of (path, class_idx)
+        self.imgs = self.rgb_dataset.imgs
         self.classes = self.rgb_dataset.classes
         self.class_to_idx = self.rgb_dataset.class_to_idx
         
     def __len__(self):
         return len(self.imgs)
-
+    
     def _get_depth_path(self, rgb_path):
-        """Convert RGB image path to corresponding depth map path."""
+        """
+        RGB yolundan Depth yolunu bulmak için akıllı eşleştirme yapar.
+        """
+        # 1. RGB root'a göre göreceli yolu al (örn: 0002/image-49.jpg)
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
-        base, _ = os.path.splitext(rel_path)
+        base, ext = os.path.splitext(rel_path)
         
-        # Dosya uzantısını ayarla (Sende .jpg görünüyor)
-        depth_rel_path = base + '.jpg'
+        # 2. Olası dosya uzantıları (.png ve .jpg öncelikli)
+        candidates = [base + '.png', base + '.jpg', base + '.jpeg']
         
-        # --- PATH DÜZELTME MANTIĞI ---
-        # Eğer klasör yapısında "gallery_drone" varsa ama depth klasörü "drone_depth" veya tam tersiyse:
-        # En garantisi tam path birleştirmektir.
+        # 3. Klasör ismi varyasyonlarını dene (drone <-> gallery_drone)
+        # Önce doğrudan depth_root altında ara
+        for cand in candidates:
+            path = os.path.join(self.depth_root, cand)
+            if os.path.exists(path):
+                return path
         
-        depth_path = os.path.join(self.depth_root, depth_rel_path)
+        # Bulunamadıysa klasör ismi düzeltmeyi dene (Hard fix)
+        # Eğer depth_root içinde "drone" geçiyorsa ama klasör "gallery_drone" ise (veya tam tersi)
+        dataset_name = os.path.basename(self.rgb_root) # örn: gallery_drone
         
-        # Eğer bulunamazsa klasör ismi farklılığını kontrol et
-        if not os.path.exists(depth_path):
-            # "drone" -> "gallery_drone" veya tam tersi durumlar için deneme yap
-            if 'gallery_drone' in depth_path:
-                alt_path = depth_path.replace('gallery_drone', 'drone')
-                if os.path.exists(alt_path):
-                    return alt_path
-            elif 'drone' in depth_path and 'gallery' not in depth_path:
-                 alt_path = depth_path.replace('drone', 'gallery_drone')
-                 if os.path.exists(alt_path):
-                    return alt_path
+        # Eğer dataset ismi 'gallery_drone' ise ama depth klasörü 'drone_depth' gibi ise
+        # Burada manuel bir 'replace' mantığı yerine, depth_root'un zaten doğru klasöre (örn: .../test/drone_depth)
+        # işaret ettiğinden emin olmalıyız.
+        
+        # Son çare: sadece dosya ismini (image-49.png) depth_root altındaki ilgili ID klasöründe ara
+        class_id = os.path.basename(os.path.dirname(rel_path)) # 0002
+        file_name = os.path.basename(rel_path) # image-49.jpg
+        base_file, _ = os.path.splitext(file_name)
+        
+        potential_path = os.path.join(self.depth_root, class_id, base_file + '.png')
+        if os.path.exists(potential_path):
+            return potential_path
+            
+        potential_path_jpg = os.path.join(self.depth_root, class_id, base_file + '.jpg')
+        if os.path.exists(potential_path_jpg):
+            return potential_path_jpg
 
-        return depth_path
+        return os.path.join(self.depth_root, base + '.png') # Varsayılan olarak döndür (bulunamasa bile)
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
         
-        # Load RGB image
-        rgb_img = Image.open(rgb_path).convert('RGB')
-        
-        # Load depth map
+        # Load RGB
+        try:
+            rgb_img = Image.open(rgb_path).convert('RGB')
+        except:
+            print(f"Error loading RGB: {rgb_path}")
+            # Dummy image
+            rgb_img = Image.new('RGB', (256, 256), (0,0,0))
+
+        # Load Depth
         depth_path = self._get_depth_path(rgb_path)
-        if os.path.exists(depth_path):
-            depth_img = Image.open(depth_path).convert('L')  # Grayscale
-        else:
-            # Fallback: create zero depth if not found
-            depth_img = Image.new('L', rgb_img.size, 0)
-            print(f"Warning: Depth map not found: {depth_path}")
         
-        # Apply transforms
+        if os.path.exists(depth_path):
+            try:
+                depth_img = Image.open(depth_path).convert('L')
+            except:
+                print(f"Error loading depth map: {depth_path}")
+                depth_img = Image.new('L', rgb_img.size, 0)
+        else:
+            # SESSİZ MOD: Uyarı basma, siyah resim üret.
+            # print(f"Warning: Depth map not found: {depth_path}") 
+            depth_img = Image.new('L', rgb_img.size, 0)
+        
+        # Transforms
         if self.transform_rgb:
             rgb_tensor = self.transform_rgb(rgb_img)
         else:
@@ -116,11 +127,19 @@ class RGBDDataset(Dataset):
         else:
             depth_tensor = transforms.ToTensor()(depth_img)
         
-        # Concatenate RGB (3, H, W) + Depth (1, H, W) -> RGBD (4, H, W)
+        # --- KESİN KANAL KONTROLÜ ---
+        # RGB Tensor [3, H, W] olmalı
+        if rgb_tensor.shape[0] != 3:
+             rgb_tensor = rgb_tensor.expand(3, -1, -1)
+             
+        # Depth Tensor [1, H, W] olmalı
+        if depth_tensor.shape[0] != 1:
+            depth_tensor = depth_tensor[0:1, :, :] # İlk kanalı al
+            
+        # Concatenate -> [4, H, W]
         rgbd_tensor = torch.cat([rgb_tensor, depth_tensor], dim=0)
         
         return rgbd_tensor, label
-
 
 def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, is_rgbd=False):
     """
