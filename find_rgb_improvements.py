@@ -61,33 +61,34 @@ class RGBDDataset(Dataset):
         
     def __len__(self):
         return len(self.imgs)
-    
+
     def _get_depth_path(self, rgb_path):
         """Convert RGB image path to corresponding depth map path."""
-        # Get relative path from rgb_root
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
+        base, _ = os.path.splitext(rel_path)
         
-        # Get directory (class_id) and filename
-        dir_name = os.path.dirname(rel_path)  # e.g., "0310"
+        # Dosya uzantısını ayarla (Sende .jpg görünüyor)
+        depth_rel_path = base + '.jpg'
         
-        # Depth files are named after class_id, not image-XX
-        # Try different extensions: class_id/class_id.ext
-        possible_extensions = ['.jpg', '.jpeg', '.png']
+        # --- PATH DÜZELTME MANTIĞI ---
+        # Eğer klasör yapısında "gallery_drone" varsa ama depth klasörü "drone_depth" veya tam tersiyse:
+        # En garantisi tam path birleştirmektir.
         
-        for depth_ext in possible_extensions:
-            # Pattern: depth_root/class_id/class_id.ext (e.g., drone_depth/0310/0310.jpg)
-            depth_path = os.path.join(self.depth_root, dir_name, dir_name + depth_ext)
-            if os.path.exists(depth_path):
-                return depth_path
+        depth_path = os.path.join(self.depth_root, depth_rel_path)
         
-        # Fallback: try flat structure depth_root/class_id.ext
-        for depth_ext in possible_extensions:
-            depth_path = os.path.join(self.depth_root, dir_name + depth_ext)
-            if os.path.exists(depth_path):
-                return depth_path
-        
-        # Return default path for error message
-        return os.path.join(self.depth_root, dir_name, dir_name + '.jpg')
+        # Eğer bulunamazsa klasör ismi farklılığını kontrol et
+        if not os.path.exists(depth_path):
+            # "drone" -> "gallery_drone" veya tam tersi durumlar için deneme yap
+            if 'gallery_drone' in depth_path:
+                alt_path = depth_path.replace('gallery_drone', 'drone')
+                if os.path.exists(alt_path):
+                    return alt_path
+            elif 'drone' in depth_path and 'gallery' not in depth_path:
+                 alt_path = depth_path.replace('drone', 'gallery_drone')
+                 if os.path.exists(alt_path):
+                    return alt_path
+
+        return depth_path
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]

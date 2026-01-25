@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Model with RGBD (4-channel) input support using MiDaS depth maps
-Modified from original model.py
 """
 
 from __future__ import print_function, division
@@ -11,20 +10,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 from torchvision import models
-from torch.autograd import Variable
 
 ######################################################################
 # 4-channel input adapter
-def convert_conv1_to_4channel(model, pretrained_weights=None):
+def convert_conv1_to_4channel(model):
     """
     ResNet'in ilk conv katmanını 3 kanaldan 4 kanala dönüştür
     """
-    # Orijinal conv1 ağırlıklarını al
     original_conv1 = model.conv1
     
-    # Yeni 4 kanallı conv1 oluştur
     new_conv1 = nn.Conv2d(
-        4,  # in_channels: RGBD
+        4,  # in_channels: RGBD (4 kanal)
         original_conv1.out_channels,
         kernel_size=original_conv1.kernel_size,
         stride=original_conv1.stride,
@@ -32,12 +28,9 @@ def convert_conv1_to_4channel(model, pretrained_weights=None):
         bias=False
     )
     
-    # Ağırlıkları kopyala
     with torch.no_grad():
-        # RGB kanalları için pretrained ağırlıkları kullan
         new_conv1.weight[:, :3, :, :] = original_conv1.weight
-        
-        # Depth kanalı için RGB'nin ortalamasını al
+        # Depth kanalı için RGB ortalamasını kullan
         new_conv1.weight[:, 3:4, :, :] = original_conv1.weight.mean(dim=1, keepdim=True)
     
     return new_conv1
@@ -45,21 +38,22 @@ def convert_conv1_to_4channel(model, pretrained_weights=None):
 
 ######################################################################
 # Load model structure
-def ft_net_rgbd(class_num, droprate=0.5, stride=2, init_model=None, pool='avg'):
+def ft_net_rgbd(class_num, droprate=0.5, stride=2, pool='avg'):
     """
-    ResNet50 with 4-channel (RGBD) input
+    ResNet50 with 4-channel (RGBD) input configuration
+    Returns the raw ResNet object with modified input layer
     """
     model = models.resnet50(pretrained=True)
     
     # Convert first conv layer to 4 channels
     model.conv1 = convert_conv1_to_4channel(model)
     
-    # Stride düzeltmesi
+    # Stride fix
     if stride == 1:
         model.layer4[0].downsample[0].stride = (1,1)
         model.layer4[0].conv2.stride = (1,1)
 
-    # Pooling
+    # Pooling fix
     if pool == 'avg+max':
         model.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
         model.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
@@ -68,7 +62,7 @@ def ft_net_rgbd(class_num, droprate=0.5, stride=2, init_model=None, pool='avg'):
     elif pool == 'max':
         model.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
     
-    model.fc = nn.Sequential()
+    model.fc = nn.Sequential() # Orijinal fc katmanını boşalt
     
     return model
 
@@ -92,7 +86,7 @@ def weights_init_classifier(m):
         init.constant_(m.bias.data, 0.0)
 
 
-# ClassBlock unchanged
+# ClassBlock
 class ClassBlock(nn.Module):
     def __init__(self, input_dim, class_num, droprate, relu=False, bnorm=True, num_bottleneck=512, linear=True, return_f = False):
         super(ClassBlock, self).__init__()
@@ -129,7 +123,7 @@ class ClassBlock(nn.Module):
             return x
 
 
-# Two-view network with RGBD satellite
+# Two-view network with RGBD
 class two_view_net_rgbd(nn.Module):
     def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, circle=False):
         super(two_view_net_rgbd, self).__init__()
@@ -137,20 +131,9 @@ class two_view_net_rgbd(nn.Module):
         # Satellite: RGBD (4 channels)
         self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
         
-        # Drone: RGB (3 channels) - normal ResNet50
+        # Drone: RGBD (4 channels) - ARTIK SİMETRİK
+        # ft_net_rgbd fonksiyonunu kullanarak model_2'yi oluşturuyoruz.
         self.model_2 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
-        if stride == 1:
-            self.model_2.layer4[0].downsample[0].stride = (1,1)
-            self.model_2.layer4[0].conv2.stride = (1,1)
-        if pool == 'avg+max':
-            self.model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
-            self.model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
-        elif pool == 'avg':
-            self.model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
-        elif pool == 'max':
-            self.model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
-        self.model_2.fc = nn.Sequential()
-
         
         self.pool = pool
         
@@ -161,10 +144,8 @@ class two_view_net_rgbd(nn.Module):
             self.classifier = ClassBlock(2048, class_num, droprate=droprate, return_f=circle)
 
     def forward(self, x1, x2):
-        if x1 is None:
-            y1 = None
-        else:
-            # Satellite (RGBD)
+        # Satellite (RGBD)
+        if x1 is not None:
             x1 = self.model_1.conv1(x1)
             x1 = self.model_1.bn1(x1)
             x1 = self.model_1.relu(x1)
@@ -183,11 +164,12 @@ class two_view_net_rgbd(nn.Module):
             
             x1 = x1.view(x1.size(0), x1.size(1))
             y1 = self.classifier(x1)
-
-        if x2 is None:
-            y2 = None
         else:
-            # Drone (RGB)
+            y1 = None
+
+        # Drone (RGBD)
+        if x2 is not None:
+            # Artık model_2 de ft_net_rgbd ile oluşturulduğu için conv1, bn1 vs. özelliklerine sahip
             x2 = self.model_2.conv1(x2)
             x2 = self.model_2.bn1(x2)
             x2 = self.model_2.relu(x2)
@@ -206,5 +188,7 @@ class two_view_net_rgbd(nn.Module):
             
             x2 = x2.view(x2.size(0), x2.size(1))
             y2 = self.classifier(x2)
+        else:
+            y2 = None
 
         return y1, y2
