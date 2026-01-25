@@ -64,62 +64,66 @@ class RGBDDataset(Dataset):
         self.rgb_dataset = datasets.ImageFolder(rgb_root)
         self.imgs = self.rgb_dataset.imgs
         
+        # DEBUG: İlk dosya kontrolü
+        if len(self.imgs) > 0:
+            print("\n🔍 DEBUG: İlk dosya yolu testi yapılıyor...")
+            sample_rgb = self.imgs[0][0]
+            sample_depth = self._get_depth_path(sample_rgb)
+            print(f"   RGB Path:   {sample_rgb}")
+            print(f"   Depth Path: {sample_depth}")
+            print(f"   Bulundu mu? {'✅ EVET' if os.path.exists(sample_depth) else '❌ HAYIR'}")
+            print("-" * 40)
+
     def __len__(self):
         return len(self.imgs)
     
     def _get_depth_path(self, rgb_path):
         """
-        RGB yolundan Depth yolunu bulmak için 'Zorla Değiştirme' (Hard Replace) Yöntemi.
-        gallery_drone -> gallery_drone_depth dönüşümünü garanti eder.
+        Dosya yolunu parçalayarak (Split) yeniden inşa etme yöntemi.
+        Bu yöntem string.replace'den daha güvenlidir.
         """
-        # 1. RGB'nin ana klasörüne göre göreceli yolunu al
-        # Örn: gallery_drone/0000/image-01.jpg
-        # Burada self.rgb_root muhtemelen .../test/gallery_drone yolunu gösteriyor olabilir.
-        # Bu yüzden tam path üzerinden manipülasyon yapacağız.
+        # 1. RGB Kök dizinine göre göreceli yolu al
+        # Örn: rgb_root=/content/data/test
+        # rgb_path=/content/data/test/gallery_drone/0001/image.jpg
+        # rel_path = gallery_drone/0001/image.jpg
+        rel_path = os.path.relpath(rgb_path, self.rgb_root)
         
-        # Dosya ismi ve uzantı ayıklama
-        dirname = os.path.dirname(rgb_path) # .../test/gallery_drone/0000
-        filename = os.path.basename(rgb_path) # image-01.jpg
-        base_name = os.path.splitext(filename)[0] # image-01
+        # 2. Yolu parçalara ayır: ['gallery_drone', '0001', 'image.jpg']
+        parts = list(os.path.split(rel_path))
         
-        # Klasör yapısını analiz et
-        # Amaç: Klasör yolundaki 'gallery_drone' ifadesini 'gallery_drone_depth' yapmak
-        # Veya 'query_satellite' ifadesini 'query_satellite_depth' yapmak
+        # Eğer path çok derinse recursive split gerekebilir, basit yaklaşım:
+        parts = rel_path.split(os.sep)
         
-        # RGB Root: /content/.../test
-        # RGB Path: /content/.../test/gallery_drone/0000/image.jpg
+        # 3. Klasör ismini düzelt (gallery_drone -> gallery_drone_depth)
+        # Genelde ilk parça klasör adıdır (gallery_drone veya query_satellite)
+        if len(parts) > 0:
+            if 'gallery_drone' == parts[0]:
+                parts[0] = 'gallery_drone_depth'
+            elif 'query_satellite' == parts[0]:
+                parts[0] = 'query_satellite_depth'
+            # Diğer varyasyonlar
+            elif 'drone' == parts[0]:
+                parts[0] = 'gallery_drone_depth'
+            elif 'satellite' == parts[0]:
+                parts[0] = 'query_satellite_depth'
         
-        # Basit string değişimi (En garantisi)
-        # Önce uzantıyı .png yap (MiDaS çıktısı genelde png'dir)
-        depth_path_candidate = rgb_path.replace('.jpg', '.png').replace('.jpeg', '.png')
+        # 4. Dosya uzantısını değiştir (.jpg -> .png)
+        filename = parts[-1]
+        name_only = os.path.splitext(filename)[0]
+        parts[-1] = name_only + '.png'
         
-        # Klasör isimlerini düzelt
-        if 'gallery_drone' in depth_path_candidate and 'gallery_drone_depth' not in depth_path_candidate:
-            depth_path_candidate = depth_path_candidate.replace('gallery_drone', 'gallery_drone_depth')
-            
-        if 'query_satellite' in depth_path_candidate and 'query_satellite_depth' not in depth_path_candidate:
-            depth_path_candidate = depth_path_candidate.replace('query_satellite', 'query_satellite_depth')
-            
-        # Ana kök dizini değiştir (RGB Root -> Depth Root)
-        # Eğer self.rgb_root ve self.depth_root farklıysa
-        if self.rgb_root in depth_path_candidate:
-            depth_path_candidate = depth_path_candidate.replace(self.rgb_root, self.depth_root)
-            
-        # --- PATH DÜZELTME SONRASI KONTROL ---
-        # Bazen replace işlemi fazla kaçabilir, manuel root değişimi yapalım:
-        # Relatif yol: 0000/image-01.jpg
-        try:
-            rel_path = os.path.relpath(rgb_path, self.rgb_root)
-            # Eğer rgb_root içinde 'gallery_drone' varsa, rel_path sadece '0000/image.jpg' olur.
-            # O zaman depth_root'un sonuna eklemeliyiz.
-            
-            candidate_2 = os.path.join(self.depth_root, rel_path).replace('.jpg', '.png').replace('.jpeg', '.png')
-            if os.path.exists(candidate_2):
-                return candidate_2
-        except:
-            pass
-
-        return depth_path_candidate
+        # 5. Depth Root ile birleştir
+        # depth_root/gallery_drone_depth/0001/image.png
+        depth_path = os.path.join(self.depth_root, *parts)
+        
+        # 6. Kontrol ve Fallback (Eğer bulunamazsa .jpg dene)
+        if not os.path.exists(depth_path):
+            parts[-1] = name_only + '.jpg'
+            depth_path_jpg = os.path.join(self.depth_root, *parts)
+            if os.path.exists(depth_path_jpg):
+                return depth_path_jpg
+        
+        return depth_path
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
@@ -139,11 +143,13 @@ class RGBDDataset(Dataset):
                 depth_img = Image.open(depth_path).convert('L')
             except: pass
         else:
-            # Sadece hata varsa yazdır (Debug için)
-            # print(f"⚠️ Missing: {depth_path}") 
-            pass
+            # Sadece ilk 5 hatada uyarı bas
+            if index < 5:
+                print(f"⚠️ Depth image not found: {depth_path}") 
         
         if depth_img is None:
+            # Eğer bulunamazsa DUMMY (Siyah) oluştur
+            # Bu uyarıyı görüyorsan accuracy düşük çıkar!
             depth_img = Image.new('L', rgb_img.size, 0)
         
         # 3. Transform
@@ -280,7 +286,6 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
         
     except Exception as e:
         print(f"Warning: GradCAM failed: {e}")
-        # Hata olsa bile dosyayı kaydetmeye çalışalım
         pass
 
     plt.tight_layout()
@@ -336,45 +341,35 @@ def main():
     print("🔍 RGBD Improvement Analysis")
     print("=" * 60)
     
-    # Path Config
+    # Path Config (Argumentlerden gelen ham yollar)
     query_rgb_path = os.path.join(args.test_dir, args.query_folder)
     gallery_rgb_path = os.path.join(args.test_dir, args.gallery_folder)
     
-    if args.depth_dir is None: args.depth_dir = args.test_dir
-        
-    def find_depth_folder(root, base):
-        # Bu fonksiyon sadece root path'i döndürür, içindeki dosya eşleşmesi Dataset class'ında yapılır.
-        # Gallery Drone -> gallery_drone_depth dönüşümü Dataset içinde otomatik yapılacak.
-        # O yüzden buraya folder path'ini değiştirmeden yolluyoruz.
-        # Sadece ana depth kökünü doğru vermemiz yeterli.
-        
-        # Eğer özel bir depth klasörü varsa onu bulalım (örn: gallery_drone_depth)
-        target_name = base
-        if 'gallery_drone' in base: target_name = 'gallery_drone_depth'
-        if 'query_satellite' in base: target_name = 'query_satellite_depth'
-        
-        path = os.path.join(root, target_name)
-        if os.path.exists(path): return path
-        
-        return os.path.join(root, base) # Bulamazsa varsayılan
-    
-    query_depth_path = find_depth_folder(args.depth_dir, args.query_folder)
-    gallery_depth_path = find_depth_folder(args.depth_dir, args.gallery_folder)
+    # Depth Root'u belirle
+    if args.depth_dir is None:
+        args.depth_dir = args.test_dir
 
-    print(f"Dataset Root: {args.test_dir}")
-    print(f"Query Depth:   {query_depth_path}")
-    print(f"Gallery Depth: {gallery_depth_path}")
+    # Depth klasörlerinin tam yolunu _get_depth_path içinde dinamik bulacağız
+    # Ancak Dataset class'ına ROOT'u vermemiz lazım.
+    # Burada args.depth_dir direkt olarak ".../cvpr2017_cvusa_depth/test" olmalı.
+    
+    print(f"RGB Root:   {args.test_dir}")
+    print(f"Depth Root: {args.depth_dir}")
     
     # Transforms
     tr_rgb = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
     tr_depth = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor(), transforms.Normalize([0.5], [0.5])])
     
     # Datasets
+    print("📂 Datasets yükleniyor...")
     q_loader_rgb = DataLoader(datasets.ImageFolder(query_rgb_path, tr_rgb), batch_size=args.batchsize, shuffle=False, num_workers=4)
     g_loader_rgb = DataLoader(datasets.ImageFolder(gallery_rgb_path, tr_rgb), batch_size=args.batchsize, shuffle=False, num_workers=4)
     
-    q_loader_rgbd = DataLoader(RGBDDataset(query_rgb_path, query_depth_path, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
-    g_loader_rgbd = DataLoader(RGBDDataset(gallery_rgb_path, gallery_depth_path, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
+    # RGBD Datasets
+    # Dikkat: depth_root olarak direkt args.depth_dir veriyoruz.
+    # Dataset class'ı bunun içine gallery_drone_depth vs ekleyecek.
+    q_loader_rgbd = DataLoader(RGBDDataset(query_rgb_path, args.depth_dir, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
+    g_loader_rgbd = DataLoader(RGBDDataset(gallery_rgb_path, args.depth_dir, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
     
     # Models
     print(f"\n📦 Loading models...")
