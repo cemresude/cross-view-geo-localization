@@ -138,7 +138,7 @@ class two_view_net_rgbd(nn.Module):
         self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
         
         # Drone: RGB (3 channels) - normal ResNet50
-        model_2 = models.resnet50(pretrained=True)
+        self.model_2 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
         if stride == 1:
             model_2.layer4[0].downsample[0].stride = (1,1)
             model_2.layer4[0].conv2.stride = (1,1)
