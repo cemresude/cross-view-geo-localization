@@ -140,17 +140,17 @@ class two_view_net_rgbd(nn.Module):
         # Drone: RGB (3 channels) - normal ResNet50
         self.model_2 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
         if stride == 1:
-            model_2.layer4[0].downsample[0].stride = (1,1)
-            model_2.layer4[0].conv2.stride = (1,1)
+            self.model_2.layer4[0].downsample[0].stride = (1,1)
+            self.model_2.layer4[0].conv2.stride = (1,1)
         if pool == 'avg+max':
-            model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
-            model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
+            self.model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
+            self.model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
         elif pool == 'avg':
-            model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
+            self.model_2.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
         elif pool == 'max':
-            model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
-        model_2.fc = nn.Sequential()
-        self.model_2 = model_2
+            self.model_2.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
+        self.model_2.fc = nn.Sequential()
+
         
         self.pool = pool
         
