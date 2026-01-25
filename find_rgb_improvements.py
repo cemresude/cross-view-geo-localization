@@ -61,6 +61,9 @@ class RGBDDataset(Dataset):
         self.transform_rgb = transform_rgb
         self.transform_depth = transform_depth
         
+        # Extract the folder type (e.g., 'query_satellite', 'gallery_drone') from rgb_root
+        self.folder_type = os.path.basename(rgb_root)
+        
         self.rgb_dataset = datasets.ImageFolder(rgb_root)
         self.imgs = self.rgb_dataset.imgs
         
@@ -82,51 +85,56 @@ class RGBDDataset(Dataset):
         """
         RGB yolunu Depth yoluna çevirirken klasör yapısını KORU ve DÖNÜŞTÜR.
         """
-        # 1. RGB Root'a göre göreceli yolu al
-        # Örn: rgb_path = .../test/gallery_drone/0000/image.jpg
-        #      rgb_root = .../test
-        #      rel_path = gallery_drone/0000/image.jpg
+        # 1. RGB Root'a göre göreceli yolu al (sadece label/filename kısmı)
+        # Örn: rgb_path = .../test/query_satellite/0000/image.jpg
+        #      rgb_root = .../test/query_satellite
+        #      rel_path = 0000/image.jpg
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
         
-        # 2. Yolu parçalarına ayır (OS bağımsız)
-        # parts = ['gallery_drone', '0000', 'image.jpg']
-        parts = rel_path.split(os.sep)
+        # 2. Klasör ismini haritala (folder_type -> folder_type_depth)
+        folder_type = self.folder_type
+        if 'gallery_drone' in folder_type:
+            depth_folder = 'gallery_drone_depth'
+        elif 'query_satellite' in folder_type:
+            depth_folder = 'query_satellite_depth'
+        elif 'gallery_satellite' in folder_type:
+            depth_folder = 'gallery_satellite_depth'
+        elif 'query_drone' in folder_type:
+            depth_folder = 'query_drone_depth'
+        elif folder_type == 'drone':
+            depth_folder = 'gallery_drone_depth'
+        elif folder_type == 'satellite':
+            depth_folder = 'query_satellite_depth'
+        else:
+            # Varsayılan: _depth ekle
+            depth_folder = folder_type + '_depth'
         
-        # 3. Klasör ismini haritala (Mapping)
-        # Eğer ilk parça (ana kategori) bilinen bir isimse, depth versiyonuyla değiştir
-        if len(parts) > 0:
-            folder_name = parts[0]
-            
-            # Haritalama Kuralları
-            if 'gallery_drone' in folder_name:
-                parts[0] = 'gallery_drone_depth'
-            elif 'query_satellite' in folder_name:
-                parts[0] = 'query_satellite_depth'
-            elif 'drone' == folder_name: # Bazen sadece 'drone' olabilir
-                parts[0] = 'gallery_drone_depth'
-            elif 'satellite' == folder_name:
-                parts[0] = 'query_satellite_depth'
-        
-        # 4. Dosya uzantısını değiştir (.jpg -> .png)
-        filename = parts[-1]
+        # 3. Dosya uzantısını değiştir (.jpg/.jpeg -> .png)
+        rel_parts = rel_path.split(os.sep)
+        filename = rel_parts[-1]
         name_without_ext = os.path.splitext(filename)[0]
-        parts[-1] = name_without_ext + '.png'
+        rel_parts[-1] = name_without_ext + '.png'
         
-        # 5. Yeni parçaları Depth Root ile birleştir
-        # depth_root + gallery_drone_depth + 0000 + image.png
-        depth_path = os.path.join(self.depth_root, *parts)
+        # 4. Yeni yolu oluştur: depth_root + depth_folder + rel_path
+        depth_path = os.path.join(self.depth_root, depth_folder, *rel_parts)
         
-        # 6. Kontrol (Eğer .png yoksa .jpg dene - nadir durumlar için)
+        # 5. Kontrol (Eğer .png yoksa alternatif uzantıları dene)
         if not os.path.exists(depth_path):
-            # Belki uzantısı jpg'dir
-            parts[-1] = name_without_ext + '.jpg'
-            potential_jpg = os.path.join(self.depth_root, *parts)
+            # .jpg dene
+            rel_parts[-1] = name_without_ext + '.jpg'
+            potential_jpg = os.path.join(self.depth_root, depth_folder, *rel_parts)
             if os.path.exists(potential_jpg):
                 return potential_jpg
+            
+            # .jpeg dene
+            rel_parts[-1] = name_without_ext + '.jpeg'
+            potential_jpeg = os.path.join(self.depth_root, depth_folder, *rel_parts)
+            if os.path.exists(potential_jpeg):
+                return potential_jpeg
                 
-            # Belki orijinal uzantıdır (.jpeg)
-            parts[-1] = filename
-            potential_orig = os.path.join(self.depth_root, *parts)
+            # Orijinal uzantıyı dene
+            rel_parts[-1] = filename
+            potential_orig = os.path.join(self.depth_root, depth_folder, *rel_parts)
             if os.path.exists(potential_orig):
                 return potential_orig
 
@@ -250,7 +258,7 @@ def find_rgbd_improvements(rgb_results, rgbd_results):
                 'query_idx': i, 'query_label': rgb_res['query_label'],
                 'rgb_prediction': rgb_res['top1_label'], 'rgbd_prediction': rgbd_res['top1_label'],
                 'rgb_rank': rgb_res['first_correct_rank'], 'rgbd_rank': rgbd_res['first_correct_rank'],
-                'rgb_score': rgb_res['top1_score'], 'rgbd_score': rgbd_res['top1_score']
+                'rgb_score': rgb_res['top1_score'], 'rgbd_score': rgb_res['top1_score']
             })
     return improvements
 
