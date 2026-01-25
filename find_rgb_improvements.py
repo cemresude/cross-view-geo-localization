@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 Find and Visualize Cases Where RGBD Model Outperforms RGB Model
-Shows images that RGB model predicts incorrectly but RGBD model predicts correctly
 """
 
 import torch
@@ -16,6 +15,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 import cv2
+import glob
 
 # Kendi modüllerin
 from model import two_view_net
@@ -25,39 +25,24 @@ from gradcam_visualization import (
     overlay_cam_on_image, find_model_path
 )
 
-# --- YARDIMCI FONKSİYON: GÜVENLİ MODEL YÜKLEME ---
+# --- YARDIMCI: GÜVENLİ MODEL YÜKLEME ---
 def load_weights_safely(model, path):
-    """
-    Model ağırlıklarını 'state_dict' anahtarı olsa da olmasa da yükler.
-    'module.' öneklerini temizler.
-    """
     try:
         checkpoint = torch.load(path, map_location='cpu')
-        
-        # Durum 1: Dosya bir sözlük ve içinde 'state_dict' var (Meta verili kayıt)
         if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
-        # Durum 2: Dosya direkt ağırlık sözlüğü (Sadece ağırlıklar)
         else:
             state_dict = checkpoint
             
-        # 'module.' öneklerini temizle (DataParallel ile eğitildiyse oluşur)
         clean_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-        
-        # Modele yükle
         model.load_state_dict(clean_state_dict, strict=False)
-        print(f"  ✅ Model loaded successfully from: {os.path.basename(path)}")
+        print(f"  ✅ Model loaded: {os.path.basename(path)}")
         return model
-        
     except Exception as e:
         print(f"  ❌ Error loading model {path}: {e}")
         raise e
 
 class RGBDDataset(Dataset):
-    """
-    Custom Dataset for loading RGB images and corresponding MiDaS depth maps.
-    Concatenates RGB (3, H, W) and Depth (1, H, W) into RGBD (4, H, W).
-    """
     def __init__(self, rgb_root, depth_root, transform_rgb=None, transform_depth=None):
         self.rgb_root = rgb_root
         self.depth_root = depth_root
@@ -66,46 +51,66 @@ class RGBDDataset(Dataset):
         
         self.rgb_dataset = datasets.ImageFolder(rgb_root)
         self.imgs = self.rgb_dataset.imgs
-        self.classes = self.rgb_dataset.classes
         
+        # DEBUG: İlk dosya için path kontrolü
+        if len(self.imgs) > 0:
+            print(f"DEBUG DATASET: Checking first sample...")
+            sample_path = self.imgs[0][0]
+            depth_sample = self._get_depth_path(sample_path, debug=True)
+            print(f"  RGB: {sample_path}")
+            print(f"  Depth Target: {depth_sample}")
+            print(f"  Exists? {os.path.exists(depth_sample)}")
+            
     def __len__(self):
         return len(self.imgs)
     
-    def _get_depth_path(self, rgb_path):
-        """RGB yolundan Depth yolunu bulmak için gelişmiş eşleştirme."""
-        rel_path = os.path.relpath(rgb_path, self.rgb_root)
-        base, ext = os.path.splitext(rel_path)
+    def _get_depth_path(self, rgb_path, debug=False):
+        """RGB yolundan Depth yolunu bulmak için çoklu strateji."""
+        rel_path = os.path.relpath(rgb_path, self.rgb_root) # örn: 0001/image.jpg
+        base_dir = os.path.dirname(rel_path) # örn: 0001
+        file_name = os.path.basename(rel_path) # örn: image.jpg
+        base_name = os.path.splitext(file_name)[0] # örn: image
         
-        # 1. Klasik uzantı kontrolü
-        candidates = [base + '.png', base + '.jpg', base + '.jpeg']
-        for cand in candidates:
-            path = os.path.join(self.depth_root, cand)
-            if os.path.exists(path): return path
-                
-        # 2. Derin arama (ID klasörü içinde sadece dosya ismiyle)
-        class_id = os.path.basename(os.path.dirname(rel_path))
-        file_name = os.path.basename(rel_path)
-        base_name_only = os.path.splitext(file_name)[0]
-        
-        deep_candidates = [
-            os.path.join(self.depth_root, class_id, base_name_only + '.png'),
-            os.path.join(self.depth_root, class_id, base_name_only + '.jpg')
+        # Strateji 1: Doğrudan aynı isimle ama farklı uzantıyla (öncelik .png)
+        candidates = [
+            os.path.join(self.depth_root, base_dir, base_name + '.png'),
+            os.path.join(self.depth_root, base_dir, base_name + '.jpg'),
+            os.path.join(self.depth_root, base_dir, base_name + '.jpeg'),
+            os.path.join(self.depth_root, base_dir, file_name) # Uzantı aynı
         ]
-        for path in deep_candidates:
-            if os.path.exists(path): return path
+        
+        for p in candidates:
+            if os.path.exists(p): return p
 
-        return os.path.join(self.depth_root, base + '.png')
+        # Strateji 2: _depth eki ile (image_depth.jpg)
+        candidates_suffix = [
+            os.path.join(self.depth_root, base_dir, base_name + '_depth.png'),
+            os.path.join(self.depth_root, base_dir, base_name + '_depth.jpg')
+        ]
+        for p in candidates_suffix:
+            if os.path.exists(p): return p
+
+        # Eğer bulunamazsa ve debug açıksa, klasör içeriğini göster
+        if debug:
+            target_dir = os.path.join(self.depth_root, base_dir)
+            if os.path.exists(target_dir):
+                print(f"  DEBUG: Directory exists but file not found.")
+                print(f"  Contents of {target_dir}: {os.listdir(target_dir)[:5]}...")
+            else:
+                print(f"  DEBUG: Directory does NOT exist: {target_dir}")
+
+        return candidates[0] # Varsayılan (Bulunamazsa ilkini döndür)
     
     def __getitem__(self, index):
         rgb_path, label = self.imgs[index]
         
-        # 1. RGB Yükle
+        # 1. RGB
         try:
             rgb_img = Image.open(rgb_path).convert('RGB')
         except:
             rgb_img = Image.new('RGB', (256, 256), (0,0,0))
 
-        # 2. Depth Yükle
+        # 2. Depth
         depth_path = self._get_depth_path(rgb_path)
         depth_img = None
         
@@ -113,6 +118,10 @@ class RGBDDataset(Dataset):
             try:
                 depth_img = Image.open(depth_path).convert('L')
             except: pass
+        else:
+            # Sadece ilk 5 hatada uyarı bas, spam yapma
+            if index < 5:
+                print(f"⚠️ Depth not found: {depth_path}")
         
         if depth_img is None:
             depth_img = Image.new('L', rgb_img.size, 0)
@@ -128,14 +137,13 @@ class RGBDDataset(Dataset):
         else:
             depth_tensor = transforms.ToTensor()(depth_img)
         
-        # 4. Kanal Kontrolü
+        # 4. Kanal Fix
         if rgb_tensor.shape[0] != 3:
              rgb_tensor = rgb_tensor.expand(3, -1, -1) if rgb_tensor.shape[0] == 1 else rgb_tensor[:3]
-                 
         if depth_tensor.shape[0] != 1:
             depth_tensor = depth_tensor[0:1]
             
-        # 5. Birleştir -> [4, H, W]
+        # 5. Combine
         rgbd_tensor = torch.cat([rgb_tensor, depth_tensor], dim=0)
         
         return rgbd_tensor, label
@@ -145,14 +153,13 @@ def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, i
     features = torch.FloatTensor()
     labels = []
     paths = []
-    
     model.eval()
     with torch.no_grad():
         for data in dataloader:
             img, label = data
             if use_gpu: img = img.cuda()
             
-            # Eğer model RGB ise (is_rgbd=False) ama veri 4 kanallı geldiyse, 3 kanala düşür
+            # RGB Modeli için 4 kanalı 3'e düşür
             if not is_rgbd and img.shape[1] == 4:
                 img = img[:, :3, :, :]
             
@@ -161,16 +168,13 @@ def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, i
             else:
                 _, outputs = model(None, img)
             
-            # Normalize
             fnorm = torch.norm(outputs, p=2, dim=1, keepdim=True)
             outputs = outputs.div(fnorm.expand_as(outputs))
-            
             features = torch.cat((features, outputs.cpu()), 0)
             labels.extend(label.numpy().tolist())
     
     for path, _ in dataloader.dataset.imgs:
         paths.append(path)
-    
     return features, labels, paths
 
 
@@ -200,12 +204,9 @@ def compute_similarity_ranking(query_features, gallery_features, query_labels, g
                 break
         
         results.append({
-            'query_idx': i,
-            'query_label': ql,
-            'top1_label': top1_label,
-            'top1_score': top1_score,
-            'is_correct': is_correct,
-            'first_correct_rank': rank,
+            'query_idx': i, 'query_label': ql,
+            'top1_label': top1_label, 'top1_score': top1_score,
+            'is_correct': is_correct, 'first_correct_rank': rank,
             'sorted_indices': sorted_indices[:10].numpy()
         })
     return results
@@ -216,14 +217,10 @@ def find_rgbd_improvements(rgb_results, rgbd_results):
     for i, (rgb_res, rgbd_res) in enumerate(zip(rgb_results, rgbd_results)):
         if not rgb_res['is_correct'] and rgbd_res['is_correct']:
             improvements.append({
-                'query_idx': i,
-                'query_label': rgb_res['query_label'],
-                'rgb_prediction': rgb_res['top1_label'],
-                'rgbd_prediction': rgbd_res['top1_label'],
-                'rgb_rank': rgb_res['first_correct_rank'],
-                'rgbd_rank': rgbd_res['first_correct_rank'],
-                'rgb_score': rgb_res['top1_score'],
-                'rgbd_score': rgbd_res['top1_score']
+                'query_idx': i, 'query_label': rgb_res['query_label'],
+                'rgb_prediction': rgb_res['top1_label'], 'rgbd_prediction': rgbd_res['top1_label'],
+                'rgb_rank': rgb_res['first_correct_rank'], 'rgbd_rank': rgbd_res['first_correct_rank'],
+                'rgb_score': rgb_res['top1_score'], 'rgbd_score': rgbd_res['top1_score']
             })
     return improvements
 
@@ -239,7 +236,6 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     rgbd_pred_img = Image.open(rgbd_top1_path).convert('RGB')
     correct_img = Image.open(correct_gallery_path).convert('RGB')
     
-    # Images
     ax1 = fig.add_subplot(gs[0, 0]); ax1.imshow(query_img); ax1.set_title(f'Query\nLabel: {query_label}')
     ax2 = fig.add_subplot(gs[0, 1]); ax2.imshow(rgb_pred_img); ax2.set_title(f'RGB (Wrong)\nLabel: {improvement_info["rgb_prediction"]}', color='red')
     ax3 = fig.add_subplot(gs[0, 2]); ax3.imshow(rgbd_pred_img); ax3.set_title(f'RGBD (Correct)\nLabel: {improvement_info["rgbd_prediction"]}', color='green')
@@ -247,22 +243,28 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     
     for ax in [ax1, ax2, ax3, ax4]: ax.axis('off')
 
-    # Grad-CAM
+    # Grad-CAM FIX: .model.layer4 YERİNE .layer4 KULLANILIYOR
     try:
         # RGB CAM
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
-        rgb_gradcam = GradCAM(rgb_model, rgb_model.model_1.model.layer4[-1])
+        # FIX: 'model_1.model' -> 'model_1'
+        target_layer_rgb = rgb_model.model_1.layer4[-1] 
+        rgb_gradcam = GradCAM(rgb_model, target_layer_rgb)
         rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
         ax6 = fig.add_subplot(gs[1, 1]); ax6.imshow(rgb_cam, cmap='jet'); ax6.set_title('RGB Attention'); ax6.axis('off')
 
         # RGBD CAM
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
-        rgbd_gradcam = GradCAM(rgbd_model, rgbd_model.model_1.model.layer4[-1])
+        # FIX: 'model_1.model' -> 'model_1'
+        target_layer_rgbd = rgbd_model.model_1.layer4[-1]
+        rgbd_gradcam = GradCAM(rgbd_model, target_layer_rgbd)
         rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
         ax10 = fig.add_subplot(gs[2, 1]); ax10.imshow(rgbd_cam, cmap='jet'); ax10.set_title('RGBD Attention'); ax10.axis('off')
         
     except Exception as e:
         print(f"Warning: GradCAM failed: {e}")
+        import traceback
+        traceback.print_exc()
 
     plt.tight_layout()
     if save_path: plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -274,8 +276,9 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
         
-        rgb_gradcam = GradCAM(rgb_model, rgb_model.model_1.model.layer4[-1])
-        rgbd_gradcam = GradCAM(rgbd_model, rgbd_model.model_1.model.layer4[-1])
+        # FIX: .model attribute kaldırıldı
+        rgb_gradcam = GradCAM(rgb_model, rgb_model.model_1.layer4[-1])
+        rgbd_gradcam = GradCAM(rgbd_model, rgbd_model.model_1.layer4[-1])
         
         rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
         rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
@@ -289,7 +292,8 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         plt.axis('off')
         if save_path: plt.savefig(save_path, bbox_inches='tight')
         plt.close()
-    except: pass
+    except Exception as e:
+        print(f"Diff visualization failed: {e}")
 
 
 def main():
@@ -320,15 +324,25 @@ def main():
     if args.depth_dir is None: args.depth_dir = args.test_dir
         
     def find_depth_folder(root, base):
-        for c in [base + '_depth', base.replace('gallery_', '') + '_depth', base]:
-            if os.path.exists(os.path.join(root, c)): return os.path.join(root, c)
+        # Klasör isim varyasyonlarını dene
+        candidates = [
+            base + '_depth', 
+            base.replace('gallery_', '') + '_depth', 
+            base,
+            # Bazen gallery_drone_depth iç içe olabilir
+            os.path.join(base + '_depth', base) 
+        ]
+        for c in candidates:
+            p = os.path.join(root, c)
+            if os.path.exists(p): return p
         return os.path.join(root, base + '_depth')
     
     query_depth_path = find_depth_folder(args.depth_dir, args.query_folder)
     gallery_depth_path = find_depth_folder(args.depth_dir, args.gallery_folder)
 
-    print(f"Dataset: {args.test_dir}")
-    print(f"Depth:   {args.depth_dir}")
+    print(f"Dataset Root: {args.test_dir}")
+    print(f"Query Depth:   {query_depth_path}")
+    print(f"Gallery Depth: {gallery_depth_path}")
     
     # Transforms
     tr_rgb = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
@@ -341,19 +355,19 @@ def main():
     q_loader_rgbd = DataLoader(RGBDDataset(query_rgb_path, query_depth_path, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
     g_loader_rgbd = DataLoader(RGBDDataset(gallery_rgb_path, gallery_depth_path, tr_rgb, tr_depth), batch_size=args.batchsize, shuffle=False, num_workers=4)
     
-    # Models - GÜVENLİ YÜKLEME KULLANILIYOR
+    # Models
     print(f"\n📦 Loading models...")
     use_gpu = torch.cuda.is_available()
     
     rgb_model = two_view_net(args.num_classes, droprate=0.5, stride=2)
     path_rgb = find_model_path(args.rgb_model, args.which_epoch)
-    rgb_model = load_weights_safely(rgb_model, path_rgb) # <-- FİX BURADA
+    rgb_model = load_weights_safely(rgb_model, path_rgb)
     rgb_model.eval()
     if use_gpu: rgb_model = rgb_model.cuda()
     
     rgbd_model = two_view_net_rgbd(args.num_classes, droprate=0.5, stride=2)
     path_rgbd = find_model_path(args.rgbd_model, args.which_epoch)
-    rgbd_model = load_weights_safely(rgbd_model, path_rgbd) # <-- FİX BURADA
+    rgbd_model = load_weights_safely(rgbd_model, path_rgbd)
     rgbd_model.eval()
     if use_gpu: rgbd_model = rgbd_model.cuda()
     
@@ -378,13 +392,12 @@ def main():
     print(f"\n📈 RESULTS:")
     print(f"  RGB Accuracy:  {rgb_acc:.2f}%")
     print(f"  RGBD Accuracy: {rgbd_acc:.2f}%")
-    print(f"  IMPROVEMENTS:  {len(improvements)} cases found where RGB failed but RGBD succeeded.")
+    print(f"  IMPROVEMENTS:  {len(improvements)} cases found.")
     
     if improvements:
-        print(f"\n🎨 Visualizing top {args.max_visualize} cases to {args.output_dir}...")
+        print(f"\n🎨 Visualizing top {args.max_visualize} cases...")
         for i, imp in enumerate(improvements[:args.max_visualize]):
             q_idx = imp['query_idx']
-            
             rgb_pred_idx = rgb_res[q_idx]['sorted_indices'][0]
             rgbd_pred_idx = rgbd_res[q_idx]['sorted_indices'][0]
             
