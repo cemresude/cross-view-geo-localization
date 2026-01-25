@@ -64,14 +64,15 @@ class RGBDDataset(Dataset):
         self.rgb_dataset = datasets.ImageFolder(rgb_root)
         self.imgs = self.rgb_dataset.imgs
         
-        # DEBUG: İlk dosya kontrolü
+        # DEBUG: İlk 3 dosyayı kontrol et (Hata varsa hemen görelim)
         if len(self.imgs) > 0:
-            print("\n🔍 DEBUG: İlk dosya yolu testi yapılıyor...")
-            sample_rgb = self.imgs[0][0]
-            sample_depth = self._get_depth_path(sample_rgb)
-            print(f"   RGB Path:   {sample_rgb}")
-            print(f"   Depth Path: {sample_depth}")
-            print(f"   Bulundu mu? {'✅ EVET' if os.path.exists(sample_depth) else '❌ HAYIR'}")
+            print("\n🔍 DEBUG: Dosya yolu testi (İlk 2 örnek)...")
+            for i in range(min(2, len(self.imgs))):
+                sample_rgb = self.imgs[i][0]
+                sample_depth = self._get_depth_path(sample_rgb)
+                print(f"   [{i}] RGB:   {sample_rgb}")
+                print(f"   [{i}] Depth: {sample_depth}")
+                print(f"   [{i}] Durum: {'✅ BULUNDU' if os.path.exists(sample_depth) else '❌ BULUNAMADI'}")
             print("-" * 40)
 
     def __len__(self):
@@ -79,50 +80,56 @@ class RGBDDataset(Dataset):
     
     def _get_depth_path(self, rgb_path):
         """
-        Dosya yolunu parçalayarak (Split) yeniden inşa etme yöntemi.
-        Bu yöntem string.replace'den daha güvenlidir.
+        RGB yolunu Depth yoluna çevirirken klasör yapısını KORU ve DÖNÜŞTÜR.
         """
-        # 1. RGB Kök dizinine göre göreceli yolu al
-        # Örn: rgb_root=/content/data/test
-        # rgb_path=/content/data/test/gallery_drone/0001/image.jpg
-        # rel_path = gallery_drone/0001/image.jpg
+        # 1. RGB Root'a göre göreceli yolu al
+        # Örn: rgb_path = .../test/gallery_drone/0000/image.jpg
+        #      rgb_root = .../test
+        #      rel_path = gallery_drone/0000/image.jpg
         rel_path = os.path.relpath(rgb_path, self.rgb_root)
         
-        # 2. Yolu parçalara ayır: ['gallery_drone', '0001', 'image.jpg']
-        parts = list(os.path.split(rel_path))
-        
-        # Eğer path çok derinse recursive split gerekebilir, basit yaklaşım:
+        # 2. Yolu parçalarına ayır (OS bağımsız)
+        # parts = ['gallery_drone', '0000', 'image.jpg']
         parts = rel_path.split(os.sep)
         
-        # 3. Klasör ismini düzelt (gallery_drone -> gallery_drone_depth)
-        # Genelde ilk parça klasör adıdır (gallery_drone veya query_satellite)
+        # 3. Klasör ismini haritala (Mapping)
+        # Eğer ilk parça (ana kategori) bilinen bir isimse, depth versiyonuyla değiştir
         if len(parts) > 0:
-            if 'gallery_drone' == parts[0]:
+            folder_name = parts[0]
+            
+            # Haritalama Kuralları
+            if 'gallery_drone' in folder_name:
                 parts[0] = 'gallery_drone_depth'
-            elif 'query_satellite' == parts[0]:
+            elif 'query_satellite' in folder_name:
                 parts[0] = 'query_satellite_depth'
-            # Diğer varyasyonlar
-            elif 'drone' == parts[0]:
+            elif 'drone' == folder_name: # Bazen sadece 'drone' olabilir
                 parts[0] = 'gallery_drone_depth'
-            elif 'satellite' == parts[0]:
+            elif 'satellite' == folder_name:
                 parts[0] = 'query_satellite_depth'
         
         # 4. Dosya uzantısını değiştir (.jpg -> .png)
         filename = parts[-1]
-        name_only = os.path.splitext(filename)[0]
-        parts[-1] = name_only + '.png'
+        name_without_ext = os.path.splitext(filename)[0]
+        parts[-1] = name_without_ext + '.png'
         
-        # 5. Depth Root ile birleştir
-        # depth_root/gallery_drone_depth/0001/image.png
+        # 5. Yeni parçaları Depth Root ile birleştir
+        # depth_root + gallery_drone_depth + 0000 + image.png
         depth_path = os.path.join(self.depth_root, *parts)
         
-        # 6. Kontrol ve Fallback (Eğer bulunamazsa .jpg dene)
+        # 6. Kontrol (Eğer .png yoksa .jpg dene - nadir durumlar için)
         if not os.path.exists(depth_path):
-            parts[-1] = name_only + '.jpg'
-            depth_path_jpg = os.path.join(self.depth_root, *parts)
-            if os.path.exists(depth_path_jpg):
-                return depth_path_jpg
-        
+            # Belki uzantısı jpg'dir
+            parts[-1] = name_without_ext + '.jpg'
+            potential_jpg = os.path.join(self.depth_root, *parts)
+            if os.path.exists(potential_jpg):
+                return potential_jpg
+                
+            # Belki orijinal uzantıdır (.jpeg)
+            parts[-1] = filename
+            potential_orig = os.path.join(self.depth_root, *parts)
+            if os.path.exists(potential_orig):
+                return potential_orig
+
         return depth_path
     
     def __getitem__(self, index):
@@ -142,14 +149,11 @@ class RGBDDataset(Dataset):
             try:
                 depth_img = Image.open(depth_path).convert('L')
             except: pass
-        else:
-            # Sadece ilk 5 hatada uyarı bas
-            if index < 5:
-                print(f"⚠️ Depth image not found: {depth_path}") 
         
+        # Bulunamadıysa Siyah Resim (Uyarıyı sadece ilk 5 seferde bas)
         if depth_img is None:
-            # Eğer bulunamazsa DUMMY (Siyah) oluştur
-            # Bu uyarıyı görüyorsan accuracy düşük çıkar!
+            if index < 5: 
+                print(f"⚠️ Depth Missing: {depth_path}")
             depth_img = Image.new('L', rgb_img.size, 0)
         
         # 3. Transform
