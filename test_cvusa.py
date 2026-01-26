@@ -389,15 +389,25 @@ def get_id(img_path):
     paths = []
     
     for item in img_path:
-        if isinstance(item, tuple):
-            path, v = item
+        # Handle different item formats
+        if isinstance(item, (list, tuple)):
+            if len(item) >= 2:
+                path = item[0]
+                v = item[1]
+            else:
+                path = item[0]
+                v = 0
         else:
             path = item
             v = 0
         
-        # Handle path if it's also a tuple
-        if isinstance(path, tuple):
+        # Handle path if it's also a tuple or list
+        if isinstance(path, (tuple, list)):
             path = path[0]
+        
+        # Convert path to string if needed
+        if not isinstance(path, str):
+            path = str(path)
         
         # Use class label if valid integer
         if isinstance(v, int) and v >= 0:
