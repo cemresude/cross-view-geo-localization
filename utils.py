@@ -52,11 +52,23 @@ def save_network(network, dirname, epoch_label):
 def load_network(name, opt):
     # Load config
     dirname = os.path.join('./model', name)
-    last_model_name = os.path.basename(get_model_list(dirname, 'net'))
-    epoch = last_model_name.split('_')[1]
-    epoch = epoch.split('.')[0]
-    if not epoch == 'last':
-        epoch = int(epoch)
+    last_model_name = get_model_list(dirname, 'net')
+    
+    if last_model_name is None:
+        raise FileNotFoundError(f"No model found in {dirname}")
+    
+    # Use the full path directly instead of reconstructing it
+    model_path = last_model_name
+    
+    # Extract epoch for return value
+    epoch_str = os.path.basename(last_model_name).split('_')[1]
+    epoch = epoch_str.split('.')[0]
+    if epoch != 'last':
+        try:
+            epoch = int(epoch)
+        except ValueError:
+            epoch = epoch  # Keep as string if not a number
+    
     config_path = os.path.join(dirname, 'opts.yaml')
     with open(config_path, 'r') as stream:
         config = yaml.load(stream, Loader=yaml.FullLoader)
@@ -99,14 +111,14 @@ def load_network(name, opt):
         print("🌈 Loading RGBD two-view model")
         model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share)
     elif opt.views == 2:
-        # Standard RGB two-view model (use_dense is passed to two_view_net if supported)
+        # Standard RGB two-view model
         model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
     elif opt.views == 3:
         model = three_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
 
     # Load weights
-    model_path = os.path.join(dirname, 'net_%s.pth' % epoch)
-    model.load_state_dict(torch.load(model_path))
+    print(f"📂 Loading model from: {model_path}")
+    model.load_state_dict(torch.load(model_path, map_location='cpu'))
 
     return model, opt, epoch
 
