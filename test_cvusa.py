@@ -62,6 +62,9 @@ opt.use_NAS = config.get('use_NAS', False)
 opt.use_vgg16 = config.get('use_vgg16', False)
 opt.stride = config.get('stride', 2)
 opt.views = config.get('views', 2)
+# Load use_rgbd from config - this is critical for model/data compatibility
+opt.use_rgbd = config.get('use_rgbd', False)
+print(f"🔧 Config: use_rgbd={opt.use_rgbd}, views={opt.views}")
 
 if 'h' in config:
     opt.h = config['h']
