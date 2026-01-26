@@ -212,28 +212,9 @@ gallery_name = opt.gallery_folder
 use_gpu = torch.cuda.is_available()
 
 ######################################################################
-# Load model
-# ----------
-print('-------test-Loss----------')
-model, _, epoch = load_network(opt.name, opt)
-model = model.eval()
-if use_gpu:
-    model = model.cuda()
-
-# Determine which view each folder corresponds to
-which_query = which_view(query_name)
-which_gallery = which_view(gallery_name)
-print(f"Query view: {which_query}, Gallery view: {which_gallery}")
-
-# Start timer
-since = time.time()
-
-######################################################################
-# Extract feature
+# Helper functions (defined before use)
 # ----------------------
-#
-# Extract feature from  a trained model.
-#
+
 def fliplr(img):
     '''flip horizontal'''
     inv_idx = torch.arange(img.size(3)-1,-1,-1).long()  # N x C x H x W
@@ -256,6 +237,29 @@ def which_view(name):
         print('unknown view')
     return -1
 
+######################################################################
+# Load model
+# ----------
+print('-------test-Loss----------')
+model, _, epoch = load_network(opt.name, opt)
+model = model.eval()
+if use_gpu:
+    model = model.cuda()
+
+# Determine which view each folder corresponds to
+which_query = which_view(query_name)
+which_gallery = which_view(gallery_name)
+print(f"Query view: {which_query}, Gallery view: {which_gallery}")
+
+# Start timer
+since = time.time()
+
+######################################################################
+# Extract feature
+# ----------------------
+#
+# Extract feature from  a trained model.
+#
 def extract_feature(model, dataloaders, view_index=1):
     features = torch.FloatTensor()
     count = 0
