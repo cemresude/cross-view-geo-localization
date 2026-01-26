@@ -205,7 +205,28 @@ else:
         opt.gallery_folder: torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16)
     }
 
+# Set query and gallery names
+query_name = opt.query_folder
+gallery_name = opt.gallery_folder
+
 use_gpu = torch.cuda.is_available()
+
+######################################################################
+# Load model
+# ----------
+print('-------test-Loss----------')
+model, _, epoch = load_network(opt.name, opt)
+model = model.eval()
+if use_gpu:
+    model = model.cuda()
+
+# Determine which view each folder corresponds to
+which_query = which_view(query_name)
+which_gallery = which_view(gallery_name)
+print(f"Query view: {which_query}, Gallery view: {which_gallery}")
+
+# Start timer
+since = time.time()
 
 ######################################################################
 # Extract feature
