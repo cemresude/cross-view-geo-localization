@@ -169,8 +169,7 @@ else:
             query_dataset = RGBDSatelliteDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
-                transform=rgbd_transform,  # Use rgbd_transform
-                img_size=(opt.h, opt.w)
+                transform=rgbd_transform
             )
         else:
             print(f"🔵 Using RGB dataset (University1652) for query: {opt.query_folder}")
@@ -186,8 +185,7 @@ else:
             query_dataset = CVUSARGBDDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
-                transform=rgbd_transform,  # Use rgbd_transform
-                img_size=(opt.h, opt.w)
+                transform=rgbd_transform
             )
         else:
             print(f"🔵 Using RGB dataset (CVUSA) for query: {opt.query_folder}")
