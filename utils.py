@@ -1,7 +1,8 @@
 import os
 import torch
 import yaml
-from model import two_view_net, three_view_net
+from model import two_view_net, three_view_net, ft_net_dense
+from model_rgbd import two_view_net_rgbd
 
 def make_weights_for_balanced_classes(images, nclasses):
     count = [0] * nclasses
@@ -50,13 +51,13 @@ def save_network(network, dirname, epoch_label):
 #---------------------------
 def load_network(name, opt):
     # Load config
-    dirname = os.path.join('./model',name)
+    dirname = os.path.join('./model', name)
     last_model_name = os.path.basename(get_model_list(dirname, 'net'))
     epoch = last_model_name.split('_')[1]
     epoch = epoch.split('.')[0]
-    if not epoch=='last':
-       epoch = int(epoch)
-    config_path = os.path.join(dirname,'opts.yaml')
+    if not epoch == 'last':
+        epoch = int(epoch)
+    config_path = os.path.join(dirname, 'opts.yaml')
     with open(config_path, 'r') as stream:
         config = yaml.load(stream, Loader=yaml.FullLoader)
 
@@ -85,35 +86,31 @@ def load_network(name, opt):
     opt.fp16 = config['fp16']
     opt.views = config['views']
 
+    # RGBD support
+    opt.use_rgbd = config.get('use_rgbd', False)
+    
+    # VGG16 support
+    opt.use_vgg16 = config.get('use_vgg16', False)
+
+    model = None
+
     if opt.use_dense:
         model = ft_net_dense(opt.nclasses, opt.droprate, opt.stride, None, opt.pool)
-    if opt.PCB:
-        model = PCB(opt.nclasses)
-
-    if opt.views == 2:
-        model = two_view_net(opt.nclasses, opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share)
+    elif opt.use_rgbd and opt.views == 2:
+        # RGBD two-view model
+        print("🌈 Loading RGBD two-view model")
+        model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share)
+    elif opt.views == 2:
+        # Standard RGB two-view model
+        model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
     elif opt.views == 3:
-        model = three_view_net(opt.nclasses, opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share)
+        model = three_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
 
-    if 'use_vgg16' in config:
-        opt.use_vgg16 = config['use_vgg16']
-        if opt.views == 2:
-            model = two_view_net(opt.nclasses, opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share, VGG16 = opt.use_vgg16)
-        elif opt.views == 3:
-            model = three_view_net(opt.nclasses, opt.droprate, stride = opt.stride, pool = opt.pool, share_weight = opt.share, VGG16 = opt.use_vgg16)
+    # Load weights
+    model_path = os.path.join(dirname, 'net_%s.pth' % epoch)
+    model.load_state_dict(torch.load(model_path))
 
-
-    # load model
-    if isinstance(epoch, int):
-        save_filename = 'net_%03d.pth'% epoch
-    else:
-        save_filename = 'net_%s.pth'% epoch
-
-    save_path = os.path.join('./model',name,save_filename)
-    print('Load the model from %s'%save_path)
-    network = model
-    network.load_state_dict(torch.load(save_path))
-    return network, opt, epoch
+    return model, opt, epoch
 
 def toogle_grad(model, requires_grad):
     for p in model.parameters():

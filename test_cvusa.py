@@ -110,6 +110,12 @@ data_transforms = transforms.Compose([
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
+# RGBD için satellite transform (depth dahil)
+rgbd_transform = transforms.Compose([
+    transforms.Resize((opt.h, opt.w), interpolation=3),
+    transforms.ToTensor(),
+])
+
 if opt.PCB:
     data_transforms = transforms.Compose([
         transforms.Resize((384,192), interpolation=3),
@@ -160,7 +166,8 @@ else:
             query_dataset = RGBDSatelliteDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
-                transform=data_transforms
+                transform=rgbd_transform,  # Use rgbd_transform
+                img_size=(opt.h, opt.w)
             )
         else:
             print(f"🔵 Using RGB dataset (University1652) for query: {opt.query_folder}")
@@ -176,7 +183,8 @@ else:
             query_dataset = CVUSARGBDDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
-                transform=data_transforms
+                transform=rgbd_transform,  # Use rgbd_transform
+                img_size=(opt.h, opt.w)
             )
         else:
             print(f"🔵 Using RGB dataset (CVUSA) for query: {opt.query_folder}")
@@ -227,7 +235,7 @@ def which_view(name):
         print('unknown view')
     return -1
 
-def extract_feature(model,dataloaders, view_index = 1):
+def extract_feature(model, dataloaders, view_index=1):
     features = torch.FloatTensor()
     count = 0
     
@@ -235,7 +243,7 @@ def extract_feature(model,dataloaders, view_index = 1):
         img, label = data
         n, c, h, w = img.size()
         count += n
-        print(count)
+        print(f"Processing batch: {count}, channels: {c}")
         
         # Initialize ff as None - will be set after first forward pass
         ff = None
@@ -247,16 +255,16 @@ def extract_feature(model,dataloaders, view_index = 1):
             
             for scale in ms:
                 if scale != 1:
-                    # bicubic is only  available in pytorch>= 1.1
                     input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bilinear', align_corners=False)
                 
-                # Extract features based on view
-                outputs = None  # Initialize outputs to avoid UnboundLocalError
+                outputs = None
                 
                 if opt.views == 2:
                     if view_index == 1:
+                        # Satellite (query) - could be 4-channel RGBD
                         outputs, _ = model(input_img, None) 
                     elif view_index == 2:
+                        # Drone/Streetview (gallery) - always 3-channel RGB
                         _, outputs = model(None, input_img)
                 elif opt.views == 3:
                     if view_index == 1:
@@ -266,11 +274,9 @@ def extract_feature(model,dataloaders, view_index = 1):
                     elif view_index == 3:
                         _, _, outputs = model(None, None, input_img)
                 
-                # Check if outputs is valid
                 if outputs is None:
                     raise ValueError(f"outputs is None for view_index={view_index}, views={opt.views}")
                 
-                # Initialize ff on first forward pass with correct dimension
                 if ff is None:
                     feature_dim = outputs.size(1)
                     print(f"📊 Detected feature dimension: {feature_dim}")
@@ -292,72 +298,60 @@ def extract_feature(model,dataloaders, view_index = 1):
             fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
             ff = ff.div(fnorm.expand_as(ff))
 
-        features = torch.cat((features,ff.data.cpu()), 0)
+        features = torch.cat((features, ff.data.cpu()), 0)
     return features
 
 def get_id(img_path):
-    camera_id = []
+    """Extract labels from dataset - handles both ImageFolder and custom datasets"""
     labels = []
     paths = []
-    for path, v in img_path:
-        # University1652 format uses class folders (v is the class label)
-        # CVUSA format uses filename as ID
+    
+    for item in img_path:
+        if isinstance(item, tuple):
+            path, v = item
+        else:
+            path = item
+            v = 0
+        
+        # Handle path if it's also a tuple
         if isinstance(path, tuple):
             path = path[0]
         
-        # Try to use v (class label) first, if it's valid
-        if isinstance(v, int):
+        # Use class label if valid integer
+        if isinstance(v, int) and v >= 0:
             labels.append(v)
         else:
             # Fallback: extract ID from filename or folder name
             filename = os.path.basename(path)
             folder_name = os.path.basename(os.path.dirname(path))
             
-            # Try folder name first (University1652)
             if folder_name.isdigit():
                 labels.append(int(folder_name))
-            # Then try filename (CVUSA)
             elif filename.split('.')[0].isdigit():
                 labels.append(int(filename.split('.')[0]))
             else:
-                labels.append(0)
+                # Use hash of filename as fallback
+                labels.append(hash(filename) % 100000)
         
         paths.append(path)
     return labels, paths
 
-######################################################################
-# Load Collected data Trained model
-print('-------test-----------')
-
-# Load model with RGBD support
-if opt.use_rgbd:
-    print("🌈 Loading RGBD model")
-    model = two_view_net_rgbd(opt.nclasses, droprate=0.5, stride=opt.stride, pool=opt.pool, share_weight=False)
-    # Load weights
-    model, _, epoch = load_network(opt.name, opt)
-else:
-    model, _, epoch = load_network(opt.name, opt)
-
-model.classifier.classifier = nn.Sequential()
-model = model.eval()
-print(model)
-if use_gpu:
-    model = model.cuda()
-
-# Extract feature
-since = time.time()
-
-# Use the folder names from arguments
-gallery_name = opt.gallery_folder
-query_name = opt.query_folder
-
-which_gallery = which_view(gallery_name)
-which_query = which_view(query_name)
-print('%d -> %d:'%(which_query, which_gallery))
-
 # Get samples/imgs depending on dataset type
-gallery_path = getattr(image_datasets[gallery_name], 'samples', None) or image_datasets[gallery_name].imgs
-query_path = getattr(image_datasets[query_name], 'samples', None) or image_datasets[query_name].imgs
+def get_dataset_samples(dataset):
+    """Get sample list from dataset, handling different dataset types"""
+    if hasattr(dataset, 'samples'):
+        return dataset.samples
+    elif hasattr(dataset, 'imgs'):
+        return dataset.imgs
+    elif hasattr(dataset, 'rgb_images'):
+        # For RGBD datasets
+        return [(img, i) for i, img in enumerate(dataset.rgb_images)]
+    else:
+        # Fallback: iterate and collect
+        return [(i, i) for i in range(len(dataset))]
+
+gallery_path = get_dataset_samples(image_datasets[gallery_name])
+query_path = get_dataset_samples(image_datasets[query_name])
 
 f = open('gallery_name.txt','w')
 for p in gallery_path:
