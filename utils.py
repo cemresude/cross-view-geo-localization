@@ -1,7 +1,7 @@
 import os
 import torch
 import yaml
-from model import two_view_net, three_view_net, ft_net_dense
+from model import two_view_net, three_view_net
 from model_rgbd import two_view_net_rgbd
 
 def make_weights_for_balanced_classes(images, nclasses):
@@ -82,8 +82,8 @@ def load_network(name, opt):
     opt.lr = config['lr']
     opt.nclasses = config['nclasses']
     opt.erasing_p = config['erasing_p']
-    opt.use_dense = config['use_dense']
-    opt.fp16 = config['fp16']
+    opt.use_dense = config.get('use_dense', False)
+    opt.fp16 = config.get('fp16', False)
     opt.views = config['views']
 
     # RGBD support
@@ -94,14 +94,12 @@ def load_network(name, opt):
 
     model = None
 
-    if opt.use_dense:
-        model = ft_net_dense(opt.nclasses, opt.droprate, opt.stride, None, opt.pool)
-    elif opt.use_rgbd and opt.views == 2:
+    if opt.use_rgbd and opt.views == 2:
         # RGBD two-view model
         print("🌈 Loading RGBD two-view model")
         model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share)
     elif opt.views == 2:
-        # Standard RGB two-view model
+        # Standard RGB two-view model (use_dense is passed to two_view_net if supported)
         model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
     elif opt.views == 3:
         model = three_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
