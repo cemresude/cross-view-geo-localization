@@ -176,24 +176,20 @@ class two_view_net_rgbd(nn.Module):
         """
         x1: satellite image (4-channel RGBD) [B, 4, H, W]
         x2: drone image (3-channel RGB) [B, 3, H, W]
+        
+        Always returns (out1, out2) tuple for consistency
         """
-        if x1 is None:
-            # Only drone input
-            x2 = self.model_2(x2)
+        out1 = None
+        out2 = None
+        
+        if x1 is not None:
+            out1 = self.model_1(x1)
             if self.training:
-                x2 = self.classifier(x2)
-            return x2
-        elif x2 is None:
-            # Only satellite input
-            x1 = self.model_1(x1)
+                out1 = self.classifier(out1)
+        
+        if x2 is not None:
+            out2 = self.model_2(x2)
             if self.training:
-                x1 = self.classifier(x1)
-            return x1
-        else:
-            # Both inputs
-            x1 = self.model_1(x1)
-            x2 = self.model_2(x2)
-            if self.training:
-                x1 = self.classifier(x1)
-                x2 = self.classifier(x2)
-            return x1, x2
+                out2 = self.classifier(out2)
+        
+        return out1, out2

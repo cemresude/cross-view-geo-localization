@@ -49,6 +49,7 @@ parser.add_argument('--fp16', action='store_true', help='use fp16.' )
 parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,1.1  1,1.1,1.2')
 parser.add_argument('--query_folder', default='query_satellite', type=str, help='query folder name (query_satellite for University1652, satellite for CVUSA)')
 parser.add_argument('--gallery_folder', default='gallery_drone', type=str, help='gallery folder name (gallery_drone for University1652, streetview for CVUSA)')
+parser.add_argument('--depth_dir', default='', type=str, help='depth directory root (e.g., ./data/cvpr2017_cvusa_depth/val). If empty, uses test_dir with _depth suffix on folder names')
 
 opt = parser.parse_args()
 ###load config###
@@ -165,7 +166,29 @@ else:
         # University1652 format - use ImageFolder
         if opt.use_rgbd:
             print(f"🌈 Using RGBD dataset (University1652) for query: {opt.query_folder}")
-            depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
+            # Determine depth folder location
+            if opt.depth_dir:
+                # Use specified depth directory
+                depth_folder = os.path.join(opt.depth_dir, opt.query_folder + '_depth')
+            else:
+                # Try multiple possible locations
+                possible_depth_paths = [
+                    os.path.join(data_dir, opt.query_folder + '_depth'),  # Same dir with _depth suffix
+                    os.path.join(os.path.dirname(data_dir) + '_depth', os.path.basename(data_dir), opt.query_folder + '_depth'),  # Parallel _depth dir
+                    os.path.join(data_dir + '_depth', opt.query_folder + '_depth'),  # data_dir_depth/folder_depth
+                ]
+                depth_folder = None
+                for path in possible_depth_paths:
+                    if os.path.exists(path):
+                        depth_folder = path
+                        break
+                if depth_folder is None:
+                    print(f"⚠️ Tried paths: {possible_depth_paths}")
+                    depth_folder = possible_depth_paths[0]  # Use first as default
+            
+            print(f"   📂 RGB folder: {query_folder}")
+            print(f"   📂 Depth folder: {depth_folder}")
+            
             query_dataset = RGBDSatelliteDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
@@ -181,7 +204,38 @@ else:
         # CVUSA format - use CVUSADataset
         if opt.use_rgbd:
             print(f"🌈 Using RGBD dataset (CVUSA) for query: {opt.query_folder}")
-            depth_folder = os.path.join(data_dir, opt.query_folder + '_depth')
+            # Determine depth folder location
+            if opt.depth_dir:
+                # Use specified depth directory
+                depth_folder = os.path.join(opt.depth_dir, opt.query_folder + '_depth')
+            else:
+                # Try multiple possible locations for CVUSA
+                # data_dir example: /content/cvpr2017_cvusa/test
+                # depth could be at: /content/cvpr2017_cvusa_depth/test/query_satellite_depth
+                parent_dir = os.path.dirname(data_dir)  # /content/cvpr2017_cvusa
+                subset_name = os.path.basename(data_dir)  # test
+                depth_parent = parent_dir + '_depth'  # /content/cvpr2017_cvusa_depth
+                
+                possible_depth_paths = [
+                    os.path.join(data_dir, opt.query_folder + '_depth'),  # Same dir with _depth suffix
+                    os.path.join(depth_parent, subset_name, opt.query_folder + '_depth'),  # Parallel _depth dir structure
+                    os.path.join(depth_parent, subset_name, opt.query_folder),  # Without _depth suffix on folder
+                ]
+                depth_folder = None
+                for path in possible_depth_paths:
+                    if os.path.exists(path):
+                        depth_folder = path
+                        print(f"   ✅ Found depth at: {path}")
+                        break
+                if depth_folder is None:
+                    print(f"⚠️ Depth folder not found. Tried paths:")
+                    for p in possible_depth_paths:
+                        print(f"      - {p}")
+                    depth_folder = possible_depth_paths[1]  # Use parallel structure as default
+            
+            print(f"   📂 RGB folder: {query_folder}")
+            print(f"   📂 Depth folder: {depth_folder}")
+            
             query_dataset = CVUSARGBDDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
@@ -288,10 +342,12 @@ def extract_feature(model, dataloaders, view_index=1):
                 if opt.views == 2:
                     if view_index == 1:
                         # Satellite (query) - could be 4-channel RGBD
-                        outputs, _ = model(input_img, None) 
+                        out1, out2 = model(input_img, None)
+                        outputs = out1
                     elif view_index == 2:
                         # Drone/Streetview (gallery) - always 3-channel RGB
-                        _, outputs = model(None, input_img)
+                        out1, out2 = model(None, input_img)
+                        outputs = out2
                 elif opt.views == 3:
                     if view_index == 1:
                         outputs, _, _ = model(input_img, None, None)
