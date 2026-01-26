@@ -62,6 +62,7 @@ parser.add_argument('--share', action='store_true', help='share weight between d
 parser.add_argument('--extra_Google', action='store_true', help='using extra noise Google' )
 parser.add_argument('--fp16', action='store_true', help='use float16 instead of float32, which will save about 50% memory' )
 parser.add_argument('--use_rgbd', action='store_true', help='use RGBD (4-channel) input for satellite images' )
+parser.add_argument('--depth_dir', default=None, type=str, help='separate depth folder root (e.g., /content/cvpr2017_cvusa_depth/train). If None, uses data_dir')
 opt = parser.parse_args()
 
 if opt.resume:
@@ -144,11 +145,41 @@ image_datasets = {}
 if opt.use_rgbd:
     print("🌈 Using RGBD (4-channel) dataset for satellite images")
     from dataset_rgbd import RGBDSatelliteDataset
+    
+    # Depth root belirleme: ayrı klasör veya data_dir içinde
+    depth_root = opt.depth_dir if opt.depth_dir else data_dir
+    print(f"   RGB folder:   {os.path.join(data_dir, 'satellite')}")
+    print(f"   Depth root:   {depth_root}")
+    
     image_datasets['satellite'] = RGBDSatelliteDataset(
         rgb_folder=os.path.join(data_dir, 'satellite'),
-        depth_folder=os.path.join(data_dir, 'satellite_depth'),
-        transform=data_transforms['satellite']
+        depth_folder=os.path.join(data_dir, 'satellite_depth'),  # Eski yol (uyumluluk için)
+        transform=data_transforms['satellite'],
+        depth_root=depth_root  # Yeni: ayrı depth klasörü desteği
     )
+    
+    # Uyarı: Hiç RGBD çifti bulunamadıysa
+    if len(image_datasets['satellite']) == 0:
+        print("\n" + "="*60)
+        print("❌ HATA: Hiç RGBD çifti bulunamadı!")
+        print("="*60)
+        print("Olası nedenler:")
+        print(f"  1. Depth klasörü yanlış: {depth_root}")
+        print(f"  2. Depth dosyaları eksik veya farklı isimde")
+        print(f"  3. Klasör yapısı beklenen formatta değil")
+        print("\nBeklenen yapı:")
+        print(f"  {depth_root}/satellite_depth/{{class}}/{{image}}.png")
+        print("\nÇözüm: --depth_dir parametresini kontrol edin")
+        print("  Örnek: --depth_dir /content/cvpr2017_cvusa_depth/train")
+        print("="*60 + "\n")
+        raise RuntimeError("RGBD dataset boş! Depth dosyaları bulunamadı.")
+    
+    # Uyarı: Eksik depth dosyası varsa
+    if hasattr(image_datasets['satellite'], 'missing_depth_count') and image_datasets['satellite'].missing_depth_count > 0:
+        missing = image_datasets['satellite'].missing_depth_count
+        total = len(image_datasets['satellite']) + missing
+        print(f"\n⚠️  UYARI: {missing}/{total} depth dosyası bulunamadı ({100*missing/total:.1f}% eksik)")
+        print(f"   Eğitim {len(image_datasets['satellite'])} RGBD çifti ile devam edecek.\n")
 else:
     print("🔵 Using RGB (3-channel) dataset for satellite images")
     image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),

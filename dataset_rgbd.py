@@ -165,22 +165,39 @@ class RGBDSatelliteDataset(Dataset):
     """
     RGBD Satellite görüntü dataset'i
     RGB görüntüye MiDaS depth map'i 4. kanal olarak eklenir
+    
+    Desteklenen depth klasör yapıları:
+    1. Aynı root içinde: data_dir/satellite_depth/
+    2. Ayrı root'ta: depth_root/train/satellite_depth/
     """
-    def __init__(self, rgb_folder, depth_folder, transform=None):
+    def __init__(self, rgb_folder, depth_folder, transform=None, depth_root=None):
         """
         Args:
-            rgb_folder: RGB görüntü klasörü yolu
-            depth_folder: Depth map klasörü yolu (MiDaS çıktısı)
+            rgb_folder: RGB görüntü klasörü yolu (örn: /content/cvpr2017_cvusa/train/satellite)
+            depth_folder: Depth map klasörü yolu (eski yol, uyumluluk için)
             transform: torchvision transforms
+            depth_root: Ayrı depth root klasörü (örn: /content/cvpr2017_cvusa_depth/train)
+                        Eğer verilirse, depth_folder yerine bu kullanılır
         """
         self.rgb_folder = rgb_folder
         self.depth_folder = depth_folder
+        self.depth_root = depth_root
         self.transform = transform
+        
+        # RGB klasör tipini belirle (satellite, drone, vb.)
+        self.folder_type = os.path.basename(rgb_folder)
         
         # Dosya listesi oluştur
         self.samples = []
+        self.missing_depth_count = 0
         self.classes = sorted(os.listdir(rgb_folder))
         self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
+        
+        print(f"\n📂 RGBDSatelliteDataset başlatılıyor...")
+        print(f"   RGB Folder:   {rgb_folder}")
+        print(f"   Depth Folder: {depth_folder}")
+        if depth_root:
+            print(f"   Depth Root:   {depth_root}")
         
         for class_name in self.classes:
             class_dir = os.path.join(rgb_folder, class_name)
@@ -190,10 +207,61 @@ class RGBDSatelliteDataset(Dataset):
             for img_name in os.listdir(class_dir):
                 if img_name.lower().endswith(('.jpg', '.png', '.jpeg')):
                     rgb_path = os.path.join(class_dir, img_name)
-                    depth_path = os.path.join(depth_folder, class_name, img_name.replace('.jpg', '_depth.jpg'))
+                    depth_path = self._find_depth_path(rgb_path, class_name, img_name)
                     
-                    if os.path.exists(depth_path):
+                    if depth_path and os.path.exists(depth_path):
                         self.samples.append((rgb_path, depth_path, self.class_to_idx[class_name]))
+                    else:
+                        self.missing_depth_count += 1
+                        if self.missing_depth_count <= 5:
+                            print(f"   ⚠️ Depth bulunamadı: {img_name} (class: {class_name})")
+        
+        if self.missing_depth_count > 5:
+            print(f"   ⚠️ ... ve {self.missing_depth_count - 5} dosya daha eksik")
+        
+        if self.missing_depth_count > 0:
+            print(f"   ⚠️ UYARI: Toplam {self.missing_depth_count} depth dosyası bulunamadı!")
+            print(f"   💡 İPUCU: depth_root parametresini kontrol edin")
+        
+        print(f"   ✅ {len(self.samples)} RGBD çifti yüklendi")
+    
+    def _find_depth_path(self, rgb_path, class_name, img_name):
+        """
+        RGB yoluna karşılık gelen depth yolunu akıllıca bul.
+        Birden fazla olası yolu dener.
+        """
+        name_without_ext = os.path.splitext(img_name)[0]
+        
+        # Olası depth dosya adları
+        possible_names = [
+            name_without_ext + '_depth.jpg',
+            name_without_ext + '_depth.png',
+            name_without_ext + '.png',
+            name_without_ext + '.jpg',
+            img_name,  # Orijinal isim
+        ]
+        
+        # Olası depth klasörleri
+        possible_folders = []
+        
+        # 1. Önce depth_root varsa onu dene
+        if self.depth_root:
+            depth_type = self.folder_type + '_depth'  # satellite -> satellite_depth
+            possible_folders.append(os.path.join(self.depth_root, depth_type, class_name))
+            possible_folders.append(os.path.join(self.depth_root, self.folder_type, class_name))
+            possible_folders.append(os.path.join(self.depth_root, class_name))
+        
+        # 2. Sonra depth_folder'ı dene
+        possible_folders.append(os.path.join(self.depth_folder, class_name))
+        
+        # 3. Tüm kombinasyonları dene
+        for folder in possible_folders:
+            for name in possible_names:
+                candidate = os.path.join(folder, name)
+                if os.path.exists(candidate):
+                    return candidate
+        
+        return None
     
     def __len__(self):
         return len(self.samples)
