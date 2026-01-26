@@ -37,34 +37,57 @@ def convert_conv1_to_4channel(model):
 
 
 ######################################################################
-# Load model structure
-def ft_net_rgbd(class_num, droprate=0.5, stride=2, pool='avg'):
+# Load model structure - as a proper nn.Module class
+class ft_net_rgbd(nn.Module):
     """
     ResNet50 with 4-channel (RGBD) input configuration
-    Returns the raw ResNet object with modified input layer
+    Structured like ft_net with .model and .pool attributes
     """
-    model = models.resnet50(pretrained=True)
-    
-    # Convert first conv layer to 4 channels
-    model.conv1 = convert_conv1_to_4channel(model)
-    
-    # Stride fix
-    if stride == 1:
-        model.layer4[0].downsample[0].stride = (1,1)
-        model.layer4[0].conv2.stride = (1,1)
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg'):
+        super(ft_net_rgbd, self).__init__()
+        model_ft = models.resnet50(pretrained=True)
+        
+        # Convert first conv layer to 4 channels
+        model_ft.conv1 = convert_conv1_to_4channel(model_ft)
+        
+        # Stride fix
+        if stride == 1:
+            model_ft.layer4[0].downsample[0].stride = (1,1)
+            model_ft.layer4[0].conv2.stride = (1,1)
+        
+        # Remove original avgpool and fc
+        model_ft.avgpool = nn.Sequential()
+        model_ft.fc = nn.Sequential()
+        
+        self.model = model_ft
+        self.pool = pool
+        
+        # Pooling layers
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.maxpool = nn.AdaptiveMaxPool2d((1,1))
 
-    # Pooling fix
-    if pool == 'avg+max':
-        model.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
-        model.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
-    elif pool == 'avg':
-        model.avgpool2 = nn.AdaptiveAvgPool2d((1,1))
-    elif pool == 'max':
-        model.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
-    
-    model.fc = nn.Sequential() # Orijinal fc katmanını boşalt
-    
-    return model
+    def forward(self, x):
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+        x = self.model.layer4(x)
+        
+        # Pooling
+        if self.pool == 'avg+max':
+            x1 = self.avgpool(x)
+            x2 = self.maxpool(x)
+            x = torch.cat((x1, x2), dim=1)
+        elif self.pool == 'avg':
+            x = self.avgpool(x)
+        elif self.pool == 'max':
+            x = self.maxpool(x)
+        
+        x = x.view(x.size(0), -1)
+        return x
 
 
 # Weights initialization
@@ -154,55 +177,18 @@ class two_view_net_rgbd(nn.Module):
         x2: drone image (3-channel RGB) [B, 3, H, W]
         """
         if self.training:
-            # Satellite branch (4-channel)
-            x1 = self.model_1.model.conv1(x1)
-            x1 = self.model_1.model.bn1(x1)
-            x1 = self.model_1.model.relu(x1)
-            x1 = self.model_1.model.maxpool(x1)
-            x1 = self.model_1.model.layer1(x1)
-            x1 = self.model_1.model.layer2(x1)
-            x1 = self.model_1.model.layer3(x1)
-            x1 = self.model_1.model.layer4(x1)
-            x1 = self.model_1.pool(x1)
-            x1 = x1.view(x1.size(0), -1)
+            # Satellite branch (4-channel) - use forward method
+            x1 = self.model_1(x1)
             x1 = self.classifier(x1)
             
-            # Drone branch (3-channel) - uses standard ResNet
-            x2 = self.model_2.model.conv1(x2)
-            x2 = self.model_2.model.bn1(x2)
-            x2 = self.model_2.model.relu(x2)
-            x2 = self.model_2.model.maxpool(x2)
-            x2 = self.model_2.model.layer1(x2)
-            x2 = self.model_2.model.layer2(x2)
-            x2 = self.model_2.model.layer3(x2)
-            x2 = self.model_2.model.layer4(x2)
-            x2 = self.model_2.pool(x2)
-            x2 = x2.view(x2.size(0), -1)
-            y2 = self.classifier(x2)
+            # Drone branch (3-channel) - use forward method
+            x2 = self.model_2(x2)
+            x2 = self.classifier(x2)
             
-            return x1, y2
+            return x1, x2
         else:
-            # Inference mode
-            x1 = self.model_1.model.conv1(x1)
-            x1 = self.model_1.model.bn1(x1)
-            x1 = self.model_1.model.relu(x1)
-            x1 = self.model_1.model.maxpool(x1)
-            x1 = self.model_1.model.layer1(x1)
-            x1 = self.model_1.model.layer2(x1)
-            x1 = self.model_1.model.layer3(x1)
-            x1 = self.model_1.model.layer4(x1)
-            x1 = self.model_1.pool(x1)
-            x1 = x1.view(x1.size(0), -1)
-            
-            x2 = self.model_2.model.conv1(x2)
-            x2 = self.model_2.model.bn1(x2)
-            x2 = self.model_2.model.relu(x2)
-            x2 = self.model_2.model.maxpool(x2)
-            x2 = self.model_2.model.layer1(x2)
-            x2 = self.model_2.model.layer2(x2)
-            x2 = self.model_2.model.layer3(x2)
-            x2 = self.model_2.model.layer4(x2)
-            x2 = self.model_2.pool(x2)
-            x2 = x2.view(x2.size(0), -1)
+            # Inference mode - return features without classifier
+            x1 = self.model_1(x1)
+            x2 = self.model_2(x2)
             
             return x1, x2
