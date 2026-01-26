@@ -125,70 +125,84 @@ class ClassBlock(nn.Module):
 
 # Two-view network with RGBD
 class two_view_net_rgbd(nn.Module):
-    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, circle=False):
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, VGG16=False):
         super(two_view_net_rgbd, self).__init__()
         
         # Satellite: RGBD (4 channels)
         self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
         
-        # Drone: RGBD (4 channels) - ARTIK SİMETRİK
-        # ft_net_rgbd fonksiyonunu kullanarak model_2'yi oluşturuyoruz.
-        self.model_2 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
-        
-        self.pool = pool
-        
-        # Classifier
-        if pool == 'avg+max':
-            self.classifier = ClassBlock(4096, class_num, droprate=droprate, return_f=circle)
+        # Drone: standard 3-channel RGB input
+        if VGG16:
+            from model import ft_net_VGG16
+            self.model_2 = ft_net_VGG16(class_num, droprate=droprate, stride=stride, pool=pool)
         else:
-            self.classifier = ClassBlock(2048, class_num, droprate=droprate, return_f=circle)
+            from model import ft_net
+            self.model_2 = ft_net(class_num, droprate=droprate, stride=stride, pool=pool)
+        
+        # Shared classifier
+        self.classifier = ClassBlock(2048, class_num, droprate)
+        if pool == 'avg+max':
+            self.classifier = ClassBlock(4096, class_num, droprate)
+        
+        self.share_weight = share_weight
+        # Note: share_weight is not used here since satellite (4ch) and drone (3ch) 
+        # have different input dimensions and cannot share the first conv layer
 
     def forward(self, x1, x2):
-        # Satellite (RGBD)
-        if x1 is not None:
-            x1 = self.model_1.conv1(x1)
-            x1 = self.model_1.bn1(x1)
-            x1 = self.model_1.relu(x1)
-            x1 = self.model_1.maxpool(x1)
-            x1 = self.model_1.layer1(x1)
-            x1 = self.model_1.layer2(x1)
-            x1 = self.model_1.layer3(x1)
-            x1 = self.model_1.layer4(x1)
+        """
+        x1: satellite image (4-channel RGBD) [B, 4, H, W]
+        x2: drone image (3-channel RGB) [B, 3, H, W]
+        """
+        if self.training:
+            # Satellite branch (4-channel)
+            x1 = self.model_1.model.conv1(x1)
+            x1 = self.model_1.model.bn1(x1)
+            x1 = self.model_1.model.relu(x1)
+            x1 = self.model_1.model.maxpool(x1)
+            x1 = self.model_1.model.layer1(x1)
+            x1 = self.model_1.model.layer2(x1)
+            x1 = self.model_1.model.layer3(x1)
+            x1 = self.model_1.model.layer4(x1)
+            x1 = self.model_1.pool(x1)
+            x1 = x1.view(x1.size(0), -1)
+            x1 = self.classifier(x1)
             
-            if self.pool == 'avg+max':
-                x1 = torch.cat((self.model_1.avgpool2(x1), self.model_1.maxpool2(x1)), dim=1)
-            elif self.pool == 'avg':
-                x1 = self.model_1.avgpool2(x1)
-            elif self.pool == 'max':
-                x1 = self.model_1.maxpool2(x1)
-            
-            x1 = x1.view(x1.size(0), x1.size(1))
-            y1 = self.classifier(x1)
-        else:
-            y1 = None
-
-        # Drone (RGBD)
-        if x2 is not None:
-            # Artık model_2 de ft_net_rgbd ile oluşturulduğu için conv1, bn1 vs. özelliklerine sahip
-            x2 = self.model_2.conv1(x2)
-            x2 = self.model_2.bn1(x2)
-            x2 = self.model_2.relu(x2)
-            x2 = self.model_2.maxpool(x2)
-            x2 = self.model_2.layer1(x2)
-            x2 = self.model_2.layer2(x2)
-            x2 = self.model_2.layer3(x2)
-            x2 = self.model_2.layer4(x2)
-            
-            if self.pool == 'avg+max':
-                x2 = torch.cat((self.model_2.avgpool2(x2), self.model_2.maxpool2(x2)), dim=1)
-            elif self.pool == 'avg':
-                x2 = self.model_2.avgpool2(x2)
-            elif self.pool == 'max':
-                x2 = self.model_2.maxpool2(x2)
-            
-            x2 = x2.view(x2.size(0), x2.size(1))
+            # Drone branch (3-channel) - uses standard ResNet
+            x2 = self.model_2.model.conv1(x2)
+            x2 = self.model_2.model.bn1(x2)
+            x2 = self.model_2.model.relu(x2)
+            x2 = self.model_2.model.maxpool(x2)
+            x2 = self.model_2.model.layer1(x2)
+            x2 = self.model_2.model.layer2(x2)
+            x2 = self.model_2.model.layer3(x2)
+            x2 = self.model_2.model.layer4(x2)
+            x2 = self.model_2.pool(x2)
+            x2 = x2.view(x2.size(0), -1)
             y2 = self.classifier(x2)
+            
+            return x1, y2
         else:
-            y2 = None
-
-        return y1, y2
+            # Inference mode
+            x1 = self.model_1.model.conv1(x1)
+            x1 = self.model_1.model.bn1(x1)
+            x1 = self.model_1.model.relu(x1)
+            x1 = self.model_1.model.maxpool(x1)
+            x1 = self.model_1.model.layer1(x1)
+            x1 = self.model_1.model.layer2(x1)
+            x1 = self.model_1.model.layer3(x1)
+            x1 = self.model_1.model.layer4(x1)
+            x1 = self.model_1.pool(x1)
+            x1 = x1.view(x1.size(0), -1)
+            
+            x2 = self.model_2.model.conv1(x2)
+            x2 = self.model_2.model.bn1(x2)
+            x2 = self.model_2.model.relu(x2)
+            x2 = self.model_2.model.maxpool(x2)
+            x2 = self.model_2.model.layer1(x2)
+            x2 = self.model_2.model.layer2(x2)
+            x2 = self.model_2.model.layer3(x2)
+            x2 = self.model_2.model.layer4(x2)
+            x2 = self.model_2.pool(x2)
+            x2 = x2.view(x2.size(0), -1)
+            
+            return x1, x2
