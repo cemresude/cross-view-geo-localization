@@ -177,18 +177,23 @@ class two_view_net_rgbd(nn.Module):
         x2: drone image (3-channel RGB) [B, 3, H, W]
         """
         if self.training:
-            # Satellite branch (4-channel) - use forward method
-            x1 = self.model_1(x1)
-            x1 = self.classifier(x1)
+            # Satellite branch (4-channel)
+            if x1 is not None:
+                x1 = self.model_1(x1)
+                x1 = self.classifier(x1)
             
-            # Drone branch (3-channel) - use forward method
-            x2 = self.model_2(x2)
-            x2 = self.classifier(x2)
+            # Drone branch (3-channel)
+            if x2 is not None:
+                x2 = self.model_2(x2)
+                x2 = self.classifier(x2)
             
             return x1, x2
         else:
             # Inference mode - return features without classifier
-            x1 = self.model_1(x1)
-            x2 = self.model_2(x2)
+            if x1 is not None:
+                x1 = self.model_1(x1)
+            
+            if x2 is not None:
+                x2 = self.model_2(x2)
             
             return x1, x2
