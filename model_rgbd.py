@@ -163,9 +163,10 @@ class two_view_net_rgbd(nn.Module):
             self.model_2 = ft_net(class_num, droprate=droprate, stride=stride, pool=pool)
         
         # Shared classifier
-        self.classifier = ClassBlock(2048, class_num, droprate)
         if pool == 'avg+max':
             self.classifier = ClassBlock(4096, class_num, droprate)
+        else:
+            self.classifier = ClassBlock(2048, class_num, droprate)
         
         self.share_weight = share_weight
         # Note: share_weight is not used here since satellite (4ch) and drone (3ch) 
@@ -176,24 +177,23 @@ class two_view_net_rgbd(nn.Module):
         x1: satellite image (4-channel RGBD) [B, 4, H, W]
         x2: drone image (3-channel RGB) [B, 3, H, W]
         """
-        if self.training:
-            # Satellite branch (4-channel)
-            if x1 is not None:
-                x1 = self.model_1(x1)
-                x1 = self.classifier(x1)
-            
-            # Drone branch (3-channel)
-            if x2 is not None:
-                x2 = self.model_2(x2)
+        if x1 is None:
+            # Only drone input
+            x2 = self.model_2(x2)
+            if self.training:
                 x2 = self.classifier(x2)
-            
-            return x1, x2
+            return x2
+        elif x2 is None:
+            # Only satellite input
+            x1 = self.model_1(x1)
+            if self.training:
+                x1 = self.classifier(x1)
+            return x1
         else:
-            # Inference mode - return features without classifier
-            if x1 is not None:
-                x1 = self.model_1(x1)
-            
-            if x2 is not None:
-                x2 = self.model_2(x2)
-            
+            # Both inputs
+            x1 = self.model_1(x1)
+            x2 = self.model_2(x2)
+            if self.training:
+                x1 = self.classifier(x1)
+                x2 = self.classifier(x2)
             return x1, x2
