@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 import cv2
 import glob
+import warnings
 
 # Kendi modüllerin
 from model import two_view_net
@@ -321,7 +322,8 @@ def find_rgbd_improvements(rgb_results, rgbd_results):
 
 def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
                                 improvement_info, query_label, rgb_top1_path, 
-                                rgbd_top1_path, correct_gallery_path, save_path=None):
+                                rgbd_top1_path, correct_gallery_path, save_path=None,
+                                depth_dir=None):
     fig = plt.figure(figsize=(24, 16))
     gs = GridSpec(3, 4, figure=fig, hspace=0.3, wspace=0.2)
     
@@ -348,7 +350,7 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
                 return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM - use only 3 channels
-        rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
+        rgb_tensor, _ = preprocess_image_with_depth(query_path, use_rgbd=False, depth_dir=depth_dir)
         if rgb_tensor.shape[1] == 4:
             rgb_tensor = rgb_tensor[:, :3, :, :]
         
@@ -370,7 +372,7 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
                 feat = self.model_1(x)
                 return feat.view(feat.size(0), -1).sum()
         
-        rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
+        rgbd_tensor, _ = preprocess_image_with_depth(query_path, use_rgbd=True, depth_dir=depth_dir)
         
         rgbd_wrapper = RGBD_Model1_Wrapper(rgbd_model)
         if torch.cuda.is_available():
@@ -386,12 +388,14 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
         import traceback
         traceback.print_exc()
 
-    plt.tight_layout()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        plt.tight_layout()
     if save_path: plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
 
 
-def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None):
+def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None, depth_dir=None):
     try:
         # Wrapper classes
         class RGB_Model1_Wrapper(nn.Module):
@@ -411,7 +415,7 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
                 return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM
-        rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
+        rgb_tensor, _ = preprocess_image_with_depth(query_path, use_rgbd=False, depth_dir=depth_dir)
         if rgb_tensor.shape[1] == 4:
             rgb_tensor = rgb_tensor[:, :3, :, :]
         
@@ -424,7 +428,7 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         rgb_cam = generate_cam_for_wrapper(rgb_wrapper, target_layer_rgb, rgb_tensor)
         
         # RGBD CAM
-        rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
+        rgbd_tensor, _ = preprocess_image_with_depth(query_path, use_rgbd=True, depth_dir=depth_dir)
         
         rgbd_wrapper = RGBD_Model1_Wrapper(rgbd_model)
         if torch.cuda.is_available():
@@ -553,8 +557,10 @@ def main():
             diff_name = os.path.join(args.output_dir, f"diff_{i+1:02d}_label_{imp['query_label']}.jpg")
             
             visualize_improvement_case(rgb_model, rgbd_model, q_path[q_idx], g_path, imp, imp['query_label'],
-                                       g_path[rgb_pred_idx], g_path[rgbd_pred_idx], correct_path, save_name)
-            attention_difference_visualization(rgb_model, rgbd_model, q_path[q_idx], diff_name)
+                                       g_path[rgb_pred_idx], g_path[rgbd_pred_idx], correct_path, save_name,
+                                       depth_dir=args.depth_dir)
+            attention_difference_visualization(rgb_model, rgbd_model, q_path[q_idx], diff_name,
+                                              depth_dir=args.depth_dir)
     else:
         print("⚠️ No improvement cases found.")
 
