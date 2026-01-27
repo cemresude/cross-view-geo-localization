@@ -11,57 +11,43 @@ import numpy as np
 import os
 
 class CVUSADataset(Dataset):
-    """
-    CVUSA dataset loader - files are directly in folder, no class subfolders
-    Automatically assigns class based on filename
-    """
+    """Dataset for CVUSA with flat folder structure (no class subfolders)"""
     def __init__(self, folder, transform=None):
-        """
-        Args:
-            folder: Image folder (satellite or drone)
-            transform: torchvision transforms
-        """
         self.folder = folder
         self.transform = transform
-        self.samples = []
         
-        # List all images
-        if not os.path.exists(folder):
-            raise FileNotFoundError(f"Folder not found: {folder}")
-            
-        image_files = [f for f in os.listdir(folder) 
-                      if f.lower().endswith(('.jpg', '.png', '.jpeg'))
-                      and not f.startswith('._')]  # Filter macOS hidden files
+        # Get all images in folder
+        self.images = []
+        self.labels = []
         
-        if len(image_files) == 0:
-            raise ValueError(f"No images found in {folder}")
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
         
-        # Extract class from filename (e.g., 000001.jpg -> class 0)
-        # Each unique ID is a class
-        file_to_class = {}
-        unique_ids = sorted(set([f.split('.')[0] for f in image_files]))
+        for filename in sorted(os.listdir(folder)):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in valid_extensions:
+                filepath = os.path.join(folder, filename)
+                self.images.append(filepath)
+                # Extract numeric ID from filename for consistent labeling
+                # e.g., "12345.jpg" -> 12345
+                basename = os.path.splitext(filename)[0]
+                # Handle filenames like "12345_sat.jpg" or just "12345.jpg"
+                numeric_part = basename.split('_')[0]
+                if numeric_part.isdigit():
+                    self.labels.append(int(numeric_part))
+                else:
+                    # Fallback: use hash for consistency
+                    self.labels.append(hash(basename) % 10000000)
         
-        for idx, img_id in enumerate(unique_ids):
-            file_to_class[img_id] = idx
-        
-        # Build sample list
-        for img_name in image_files:
-            img_id = img_name.split('.')[0]
-            img_path = os.path.join(folder, img_name)
-            label = file_to_class[img_id]
-            self.samples.append((img_path, label))
-        
-        self.classes = [str(i) for i in range(len(unique_ids))]
-        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
-        
-        print(f"✅ Loaded {len(self.samples)} images from {folder}")
-        print(f"   Classes: {len(self.classes)}")
+        print(f"📂 CVUSADataset: Loaded {len(self.images)} images from {folder}")
+        if len(self.labels) > 0:
+            print(f"   Label range: {min(self.labels)} - {max(self.labels)}")
     
     def __len__(self):
-        return len(self.samples)
+        return len(self.images)
     
     def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
+        img_path = self.images[idx]
+        label = self.labels[idx]
         img = Image.open(img_path).convert('RGB')
         
         if self.transform:
@@ -71,67 +57,64 @@ class CVUSADataset(Dataset):
 
 
 class CVUSARGBDDataset(Dataset):
-    """
-    CVUSA RGBD dataset - RGB + Depth
-    """
+    """Dataset for CVUSA RGBD with flat folder structure"""
     def __init__(self, rgb_folder, depth_folder, transform=None):
-        """
-        Args:
-            rgb_folder: RGB satellite image folder
-            depth_folder: Depth map folder
-            transform: torchvision transforms
-        """
         self.rgb_folder = rgb_folder
         self.depth_folder = depth_folder
         self.transform = transform
-        self.samples = []
         
-        if not os.path.exists(rgb_folder):
-            raise FileNotFoundError(f"RGB folder not found: {rgb_folder}")
-        if not os.path.exists(depth_folder):
-            raise FileNotFoundError(f"Depth folder not found: {depth_folder}")
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
         
-        # List RGB files
-        rgb_files = [f for f in os.listdir(rgb_folder) 
-                    if f.lower().endswith(('.jpg', '.png', '.jpeg'))
-                    and not f.startswith('._')]  # Filter macOS hidden files
+        # Get all RGB images
+        self.rgb_images = []
+        self.depth_images = []
+        self.labels = []
         
-        if len(rgb_files) == 0:
-            raise ValueError(f"No RGB images found in {rgb_folder}")
+        for filename in sorted(os.listdir(rgb_folder)):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in valid_extensions:
+                rgb_path = os.path.join(rgb_folder, filename)
+                
+                # Find corresponding depth image
+                basename = os.path.splitext(filename)[0]
+                depth_path = None
+                for depth_ext in valid_extensions:
+                    potential_depth = os.path.join(depth_folder, basename + depth_ext)
+                    if os.path.exists(potential_depth):
+                        depth_path = potential_depth
+                        break
+                
+                if depth_path is None:
+                    # Try with _depth suffix
+                    for depth_ext in valid_extensions:
+                        potential_depth = os.path.join(depth_folder, basename + '_depth' + depth_ext)
+                        if os.path.exists(potential_depth):
+                            depth_path = potential_depth
+                            break
+                
+                if depth_path:
+                    self.rgb_images.append(rgb_path)
+                    self.depth_images.append(depth_path)
+                    # Extract numeric ID from filename for consistent labeling
+                    numeric_part = basename.split('_')[0]
+                    if numeric_part.isdigit():
+                        self.labels.append(int(numeric_part))
+                    else:
+                        self.labels.append(hash(basename) % 10000000)
         
-        # Extract class from filename
-        file_to_class = {}
-        unique_ids = sorted(set([f.split('.')[0] for f in rgb_files]))
-        
-        for idx, img_id in enumerate(unique_ids):
-            file_to_class[img_id] = idx
-        
-        # Match RGB + Depth
-        for img_name in rgb_files:
-            img_id = img_name.split('.')[0]
-            rgb_path = os.path.join(rgb_folder, img_name)
-            
-            # Look for depth file
-            depth_name = img_name.replace('.jpg', '_depth.jpg').replace('.png', '_depth.png')
-            depth_path = os.path.join(depth_folder, depth_name)
-            
-            if os.path.exists(depth_path):
-                label = file_to_class[img_id]
-                self.samples.append((rgb_path, depth_path, label))
-            else:
-                print(f"⚠️  Depth not found for {img_name}, skipping...")
-        
-        self.classes = [str(i) for i in range(len(unique_ids))]
-        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
-        
-        print(f"✅ Loaded {len(self.samples)} RGBD pairs from {rgb_folder}")
-        print(f"   Classes: {len(self.classes)}")
+        print(f"📂 CVUSARGBDDataset: Loaded {len(self.rgb_images)} RGBD pairs")
+        print(f"   RGB folder: {rgb_folder}")
+        print(f"   Depth folder: {depth_folder}")
+        if len(self.labels) > 0:
+            print(f"   Label range: {min(self.labels)} - {max(self.labels)}")
     
     def __len__(self):
-        return len(self.samples)
+        return len(self.rgb_images)
     
     def __getitem__(self, idx):
-        rgb_path, depth_path, label = self.samples[idx]
+        rgb_path = self.rgb_images[idx]
+        depth_path = self.depth_images[idx]
+        label = self.labels[idx]
         
         # Load RGB
         rgb = Image.open(rgb_path).convert('RGB')

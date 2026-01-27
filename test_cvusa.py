@@ -115,12 +115,30 @@ data_transforms = transforms.Compose([
 ])
 
 # RGBD için satellite transform (depth dahil)
-rgbd_transform = transforms.Compose([
-    transforms.Resize((opt.h, opt.w), interpolation=3),
-    transforms.ToTensor(),
-    # Note: ToTensor() already normalizes to [0,1] range
-    # RGB channels should use ImageNet normalization, depth should stay [0,1]
-])
+# Custom transform that normalizes RGB channels with ImageNet stats
+class RGBDTransform:
+    """Transform for RGBD images: resize, to tensor, and normalize RGB channels"""
+    def __init__(self, size):
+        self.size = size
+        self.resize = transforms.Resize(size, interpolation=3)
+        self.to_tensor = transforms.ToTensor()
+        self.normalize = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    
+    def __call__(self, img):
+        # img is expected to be a PIL Image with 4 channels (RGBD)
+        img = self.resize(img)
+        img = self.to_tensor(img)  # Now [4, H, W], values in [0, 1]
+        
+        # Normalize only RGB channels (first 3), keep depth as-is
+        rgb = img[:3]  # [3, H, W]
+        depth = img[3:4]  # [1, H, W]
+        
+        rgb = self.normalize(rgb)
+        
+        # Concatenate back
+        return torch.cat([rgb, depth], dim=0)  # [4, H, W]
+
+rgbd_transform = RGBDTransform((opt.h, opt.w))
 
 if opt.PCB:
     data_transforms = transforms.Compose([
@@ -422,21 +440,24 @@ def get_id(img_path):
         if not isinstance(path, str):
             path = str(path)
         
-        # Use class label if valid integer
+        # For custom datasets (CVUSA), v is the actual label from the dataset
+        # Use it directly instead of trying to extract from path
         if isinstance(v, int) and v >= 0:
             labels.append(v)
         else:
-            # Fallback: extract ID from filename or folder name
+            # Fallback: extract ID from filename
             filename = os.path.basename(path)
-            folder_name = os.path.basename(os.path.dirname(path))
-            
-            if folder_name.isdigit():
-                labels.append(int(folder_name))
-            elif filename.split('.')[0].isdigit():
-                labels.append(int(filename.split('.')[0]))
+            basename = os.path.splitext(filename)[0]
+            # Extract numeric ID from filename (e.g., "12345.jpg" or "12345_sat.jpg")
+            numeric_part = basename.split('_')[0]
+            if numeric_part.isdigit():
+                labels.append(int(numeric_part))
             else:
-                # Use hash of filename as fallback
-                labels.append(hash(filename) % 100000)
+                folder_name = os.path.basename(os.path.dirname(path))
+                if folder_name.isdigit():
+                    labels.append(int(folder_name))
+                else:
+                    labels.append(hash(basename) % 10000000)
         
         paths.append(path)
     return labels, paths
@@ -448,9 +469,12 @@ def get_dataset_samples(dataset):
         return dataset.samples
     elif hasattr(dataset, 'imgs'):
         return dataset.imgs
-    elif hasattr(dataset, 'rgb_images'):
-        # For RGBD datasets
-        return [(img, i) for i, img in enumerate(dataset.rgb_images)]
+    elif hasattr(dataset, 'rgb_images') and hasattr(dataset, 'labels'):
+        # For RGBD datasets - include actual labels
+        return [(img, label) for img, label in zip(dataset.rgb_images, dataset.labels)]
+    elif hasattr(dataset, 'images') and hasattr(dataset, 'labels'):
+        # For CVUSADataset - include actual labels
+        return [(img, label) for img, label in zip(dataset.images, dataset.labels)]
     else:
         # Fallback: iterate and collect
         return [(i, i) for i in range(len(dataset))]
