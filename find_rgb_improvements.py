@@ -25,6 +25,58 @@ from gradcam_visualization import (
     overlay_cam_on_image, find_model_path
 )
 
+# --- CUSTOM GRADCAM FOR WRAPPERS ---
+def generate_cam_for_wrapper(model, target_layer, input_tensor):
+    """Custom GradCAM that works with our wrapper models that return scalars."""
+    model.eval()
+    
+    # Storage for activations and gradients
+    activations = []
+    gradients = []
+    
+    def forward_hook(module, input, output):
+        activations.append(output.detach())
+    
+    def backward_hook(module, grad_input, grad_output):
+        gradients.append(grad_output[0].detach())
+    
+    # Register hooks
+    forward_handle = target_layer.register_forward_hook(forward_hook)
+    backward_handle = target_layer.register_full_backward_hook(backward_hook)
+    
+    try:
+        # Forward pass
+        if torch.cuda.is_available():
+            input_tensor = input_tensor.cuda()
+        
+        output = model(input_tensor)
+        
+        # Backward pass
+        model.zero_grad()
+        output.backward()
+        
+        # Get activations and gradients
+        act = activations[0]
+        grad = gradients[0]
+        
+        # Global average pooling of gradients
+        weights = torch.mean(grad, dim=(2, 3), keepdim=True)
+        
+        # Weighted combination
+        cam = torch.sum(weights * act, dim=1, keepdim=True)
+        cam = torch.relu(cam)
+        
+        # Normalize
+        cam = cam.squeeze().cpu().numpy()
+        cam = cv2.resize(cam, (input_tensor.shape[3], input_tensor.shape[2]))
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        
+        return cam
+        
+    finally:
+        forward_handle.remove()
+        backward_handle.remove()
+
 # --- YARDIMCI: GÜVENLİ MODEL YÜKLEME ---
 def load_weights_safely(model, path):
     try:
@@ -286,14 +338,13 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     for ax in [ax1, ax2, ax3, ax4]: ax.axis('off')
 
     try:
-        # Create wrapper for RGB model (view 1) - returns scalar sum for gradient computation
+        # Create wrapper for RGB model (view 1)
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-            def forward(self, x, *args, **kwargs):
+            def forward(self, x):
                 feat = self.model_1(x)
-                # Flatten and sum to get a scalar for backward pass
                 return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM - use only 3 channels
@@ -307,18 +358,16 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
         rgb_wrapper.eval()
         
         target_layer_rgb = get_target_layer(rgb_wrapper.model_1)
-        rgb_gradcam = GradCAM(rgb_wrapper, target_layer_rgb)
-        rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
+        rgb_cam = generate_cam_for_wrapper(rgb_wrapper, target_layer_rgb, rgb_tensor)
         ax6 = fig.add_subplot(gs[1, 1]); ax6.imshow(rgb_cam, cmap='jet'); ax6.set_title('RGB Attention'); ax6.axis('off')
 
-        # RGBD CAM - need to use model_1 directly for proper 4-channel handling
+        # RGBD CAM
         class RGBD_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-            def forward(self, x, *args, **kwargs):
+            def forward(self, x):
                 feat = self.model_1(x)
-                # Flatten and sum to get a scalar for backward pass
                 return feat.view(feat.size(0), -1).sum()
         
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
@@ -329,15 +378,13 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
         rgbd_wrapper.eval()
         
         target_layer_rgbd = get_target_layer(rgbd_wrapper.model_1)
-        rgbd_gradcam = GradCAM(rgbd_wrapper, target_layer_rgbd)
-        rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
+        rgbd_cam = generate_cam_for_wrapper(rgbd_wrapper, target_layer_rgbd, rgbd_tensor)
         ax10 = fig.add_subplot(gs[2, 1]); ax10.imshow(rgbd_cam, cmap='jet'); ax10.set_title('RGBD Attention'); ax10.axis('off')
         
     except Exception as e:
         print(f"Warning: GradCAM failed: {e}")
         import traceback
         traceback.print_exc()
-        pass
 
     plt.tight_layout()
     if save_path: plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -346,23 +393,21 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
 
 def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None):
     try:
-        # Wrapper classes - return scalar sum for gradient computation
+        # Wrapper classes
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-            def forward(self, x, *args, **kwargs):
+            def forward(self, x):
                 feat = self.model_1(x)
-                # Flatten and sum to get a scalar for backward pass
                 return feat.view(feat.size(0), -1).sum()
         
         class RGBD_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-            def forward(self, x, *args, **kwargs):
+            def forward(self, x):
                 feat = self.model_1(x)
-                # Flatten and sum to get a scalar for backward pass
                 return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM
@@ -376,8 +421,7 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         rgb_wrapper.eval()
         
         target_layer_rgb = get_target_layer(rgb_wrapper.model_1)
-        rgb_gradcam = GradCAM(rgb_wrapper, target_layer_rgb)
-        rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
+        rgb_cam = generate_cam_for_wrapper(rgb_wrapper, target_layer_rgb, rgb_tensor)
         
         # RGBD CAM
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
@@ -388,8 +432,7 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         rgbd_wrapper.eval()
         
         target_layer_rgbd = get_target_layer(rgbd_wrapper.model_1)
-        rgbd_gradcam = GradCAM(rgbd_wrapper, target_layer_rgbd)
-        rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
+        rgbd_cam = generate_cam_for_wrapper(rgbd_wrapper, target_layer_rgbd, rgbd_tensor)
         
         diff = rgbd_cam - rgb_cam
         
