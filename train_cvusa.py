@@ -141,6 +141,7 @@ if opt.train_all:
 
 image_datasets = {}
 
+ 
 # RGBD or RGB dataset for satellite
 if opt.use_rgbd:
     print("🌈 Using RGBD (4-channel) dataset for satellite images")
@@ -150,14 +151,41 @@ if opt.use_rgbd:
     depth_root = opt.depth_dir if opt.depth_dir else data_dir
     print(f"   RGB folder:   {os.path.join(data_dir, 'satellite')}")
     print(f"   Depth root:   {depth_root}")
+       # DEBUG: Klasör yapısını kontrol et
+    rgb_folder = os.path.join(data_dir, 'satellite')
+    print(f"\n🔍 DEBUG: Klasör yapısı kontrol ediliyor...")
+    print(f"   RGB folder exists: {os.path.exists(rgb_folder)}")
+    if os.path.exists(rgb_folder):
+        classes = [d for d in os.listdir(rgb_folder) if os.path.isdir(os.path.join(rgb_folder, d))]
+        print(f"   RGB classes found: {len(classes)}")
+        if len(classes) > 0:
+            sample_class = classes[0]
+            sample_rgb_path = os.path.join(rgb_folder, sample_class)
+            rgb_files = [f for f in os.listdir(sample_rgb_path) if f.lower().endswith(('.jpg', '.png'))]
+            print(f"   Sample class: {sample_class}")
+            print(f"   Sample RGB files: {rgb_files[:3]}")
+    
+    # Depth klasörlerini kontrol et
+    possible_depth_folders = [
+        os.path.join(depth_root, 'satellite_depth'),
+        os.path.join(depth_root, 'satellite'),
+        os.path.join(data_dir, 'satellite_depth'),
+    ]
+    print(f"\n   Checking possible depth folders:")
+    for df in possible_depth_folders:
+        exists = os.path.exists(df)
+        print(f"   - {df}: {exists}")
+        if exists and os.path.isdir(df):
+            subdirs = [d for d in os.listdir(df) if os.path.isdir(os.path.join(df, d))]
+            print(f"     └─ Subdirs: {subdirs[:5]}")
     
     image_datasets['satellite'] = RGBDSatelliteDataset(
         rgb_folder=os.path.join(data_dir, 'satellite'),
-        depth_folder=os.path.join(data_dir, 'satellite_depth'),  # Eski yol (uyumluluk için)
+        depth_folder=os.path.join(data_dir, 'satellite_depth'),
         transform=data_transforms['satellite'],
-        depth_root=depth_root  # Yeni: ayrı depth klasörü desteği
+        depth_root=depth_root
     )
-    
+
     # Uyarı: Hiç RGBD çifti bulunamadıysa
     if len(image_datasets['satellite']) == 0:
         print("\n" + "="*60)

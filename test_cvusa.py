@@ -118,6 +118,8 @@ data_transforms = transforms.Compose([
 rgbd_transform = transforms.Compose([
     transforms.Resize((opt.h, opt.w), interpolation=3),
     transforms.ToTensor(),
+    # Note: ToTensor() already normalizes to [0,1] range
+    # RGB channels should use ImageNet normalization, depth should stay [0,1]
 ])
 
 if opt.PCB:
@@ -323,7 +325,14 @@ def extract_feature(model, dataloaders, view_index=1):
         img, label = data
         n, c, h, w = img.size()
         count += n
-        print(f"Processing batch: {count}, channels: {c}")
+        print(f"Processing batch: {count}, channels: {c}, shape: {img.shape}")
+        
+        # Verify channel count matches expected format
+        if view_index == 1 and opt.use_rgbd:
+            if c != 4:
+                print(f"⚠️ WARNING: Expected 4 channels for RGBD satellite view, got {c}")
+        elif c != 3:
+            print(f"⚠️ WARNING: Expected 3 channels for RGB view, got {c}")
         
         # Initialize ff as None - will be set after first forward pass
         ff = None
@@ -342,6 +351,8 @@ def extract_feature(model, dataloaders, view_index=1):
                 if opt.views == 2:
                     if view_index == 1:
                         # Satellite (query) - could be 4-channel RGBD
+                        if opt.use_rgbd:
+                            print(f"🔍 Feeding RGBD input with {input_img.shape[1]} channels to model")
                         out1, out2 = model(input_img, None)
                         outputs = out1
                     elif view_index == 2:
@@ -350,6 +361,8 @@ def extract_feature(model, dataloaders, view_index=1):
                         outputs = out2
                 elif opt.views == 3:
                     if view_index == 1:
+                        if opt.use_rgbd:
+                            print(f"🔍 Feeding RGBD input with {input_img.shape[1]} channels to model")
                         outputs, _, _ = model(input_img, None, None)
                     elif view_index == 2:
                         _, outputs, _ = model(None, input_img, None)
