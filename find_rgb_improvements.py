@@ -318,7 +318,98 @@ def find_rgbd_improvements(rgb_results, rgbd_results):
                 'rgb_score': rgb_res['top1_score'], 'rgbd_score': rgb_res['top1_score']
             })
     return improvements
+def preprocess_image_with_depth(image_path, use_rgbd=False, depth_dir=None):
+    """
+    Tek bir görüntü yolu alır, gerekirse depth görüntüsünü bulur ve
+    modele girmeye hazır (1, C, H, W) boyutunda tensor döndürür.
+    """
+    # 1. Dönüşümler (Main fonksiyonundaki ile aynı standartlarda olmalı)
+    transform_rgb = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+    
+    transform_depth = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5], [0.5])
+    ])
+    
+    # 2. RGB Resmi Yükle
+    rgb_img = Image.open(image_path).convert('RGB')
+    rgb_tensor = transform_rgb(rgb_img)
+    
+    # Eğer sadece RGB isteniyorsa (batch boyutu ekleyip dön)
+    if not use_rgbd:
+        return rgb_tensor.unsqueeze(0), rgb_img
 
+    # 3. Depth Resmi Bul (RGBDDataset mantığıyla eşleşmeli)
+    depth_img = None
+    
+    # Yolu parçalarına ayırıp klasör tipini tespit etmeye çalışalım
+    parts = image_path.split(os.sep)
+    
+    # Bilinen klasör isimleri (Dataset yapısına göre)
+    folder_map = {
+        'query_satellite': 'query_satellite_depth',
+        'gallery_drone': 'gallery_drone_depth',
+        'gallery_satellite': 'gallery_satellite_depth',
+        'query_drone': 'query_drone_depth',
+        'satellite': 'query_satellite_depth', # Alternatif isimlendirme
+        'drone': 'gallery_drone_depth'        # Alternatif isimlendirme
+    }
+    
+    detected_folder = None
+    target_depth_folder = None
+    
+    # Yolun içinde bu klasörlerden biri geçiyor mu?
+    for key in folder_map:
+        if key in parts:
+            detected_folder = key
+            target_depth_folder = folder_map[key]
+            break
+            
+    if target_depth_folder and depth_dir:
+        try:
+            # Klasörden sonraki kısmı al (örn: 0001/image.jpg)
+            idx = parts.index(detected_folder)
+            rel_parts = parts[idx+1:]
+            
+            # Uzantıyı .png yap (Depth genelde png olur)
+            filename = rel_parts[-1]
+            name_no_ext = os.path.splitext(filename)[0]
+            rel_parts[-1] = name_no_ext + '.png'
+            
+            # Yeni yolu oluştur: depth_root / depth_folder / ...
+            depth_path = os.path.join(depth_dir, target_depth_folder, *rel_parts)
+            
+            if os.path.exists(depth_path):
+                depth_img = Image.open(depth_path).convert('L')
+            else:
+                # .png yoksa .jpg dene
+                rel_parts[-1] = name_no_ext + '.jpg'
+                depth_path_jpg = os.path.join(depth_dir, target_depth_folder, *rel_parts)
+                if os.path.exists(depth_path_jpg):
+                    depth_img = Image.open(depth_path_jpg).convert('L')
+        except Exception as e:
+            print(f"Depth loading error for {image_path}: {e}")
+
+    # Bulunamazsa Siyah Resim (Fallback)
+    if depth_img is None:
+        depth_img = Image.new('L', rgb_img.size, 0)
+
+    # 4. Transform ve Combine
+    depth_tensor = transform_depth(depth_img)
+    
+    # Boyut garantsi (tek kanal)
+    if depth_tensor.shape[0] != 1:
+        depth_tensor = depth_tensor[0:1]
+        
+    # RGB ve Depth birleştir (4 kanal)
+    rgbd_tensor = torch.cat([rgb_tensor, depth_tensor], dim=0)
+    
+    return rgbd_tensor.unsqueeze(0), rgb_img
 
 def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
                                 improvement_info, query_label, rgb_top1_path, 
