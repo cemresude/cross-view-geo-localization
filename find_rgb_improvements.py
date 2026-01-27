@@ -286,15 +286,15 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     for ax in [ax1, ax2, ax3, ax4]: ax.axis('off')
 
     try:
-        # Create wrapper for RGB model (view 1)
+        # Create wrapper for RGB model (view 1) - returns features directly, sum for scalar gradient
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-                self.classifier = model.classifier
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return self.classifier.classifier(feat)
+                # Return sum of features to get scalar for backward
+                return feat.sum(dim=1, keepdim=True)
         
         # RGB CAM - use only 3 channels
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
@@ -316,10 +316,9 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-                self.classifier = model.classifier
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return self.classifier.classifier(feat)
+                return feat.sum(dim=1, keepdim=True)
         
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
         
@@ -344,24 +343,22 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
 
 def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None):
     try:
-        # Wrapper classes with flexible forward signature
+        # Wrapper classes - return feature sum for gradient computation
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-                self.classifier = model.classifier
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return self.classifier.classifier(feat)
+                return feat.sum(dim=1, keepdim=True)
         
         class RGBD_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
-                self.classifier = model.classifier
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return self.classifier.classifier(feat)
+                return feat.sum(dim=1, keepdim=True)
         
         # RGB CAM
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
