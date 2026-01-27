@@ -30,7 +30,8 @@ class CVUSADataset(Dataset):
             raise FileNotFoundError(f"Folder not found: {folder}")
             
         image_files = [f for f in os.listdir(folder) 
-                      if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                      if f.lower().endswith(('.jpg', '.png', '.jpeg'))
+                      and not f.startswith('._')]  # Filter macOS hidden files
         
         if len(image_files) == 0:
             raise ValueError(f"No images found in {folder}")
@@ -92,7 +93,8 @@ class CVUSARGBDDataset(Dataset):
         
         # List RGB files
         rgb_files = [f for f in os.listdir(rgb_folder) 
-                    if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                    if f.lower().endswith(('.jpg', '.png', '.jpeg'))
+                    and not f.startswith('._')]  # Filter macOS hidden files
         
         if len(rgb_files) == 0:
             raise ValueError(f"No RGB images found in {rgb_folder}")
@@ -205,7 +207,7 @@ class RGBDSatelliteDataset(Dataset):
                 continue
             
             for img_name in os.listdir(class_dir):
-                if img_name.lower().endswith(('.jpg', '.png', '.jpeg')):
+                if img_name.lower().endswith(('.jpg', '.png', '.jpeg')) and not img_name.startswith('._'):
                     rgb_path = os.path.join(class_dir, img_name)
                     depth_path = self._find_depth_path(rgb_path, class_name, img_name)
                     
@@ -230,7 +232,9 @@ class RGBDSatelliteDataset(Dataset):
         RGB yoluna karşılık gelen depth yolunu akıllıca bul.
         Birden fazla olası yolu dener.
         """
-        name_without_ext = os.path.splitext(img_name)[0]
+        # Remove ._ prefix if present (macOS hidden files)
+        clean_name = img_name[2:] if img_name.startswith('._') else img_name
+        name_without_ext = os.path.splitext(clean_name)[0]
         
         # Olası depth dosya adları
         possible_names = [

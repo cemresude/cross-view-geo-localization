@@ -151,17 +151,19 @@ if opt.use_rgbd:
     depth_root = opt.depth_dir if opt.depth_dir else data_dir
     print(f"   RGB folder:   {os.path.join(data_dir, 'satellite')}")
     print(f"   Depth root:   {depth_root}")
-       # DEBUG: Klasör yapısını kontrol et
+    # DEBUG: Klasör yapısını kontrol et
     rgb_folder = os.path.join(data_dir, 'satellite')
     print(f"\n🔍 DEBUG: Klasör yapısı kontrol ediliyor...")
     print(f"   RGB folder exists: {os.path.exists(rgb_folder)}")
     if os.path.exists(rgb_folder):
-        classes = [d for d in os.listdir(rgb_folder) if os.path.isdir(os.path.join(rgb_folder, d))]
+        classes = [d for d in os.listdir(rgb_folder) if os.path.isdir(os.path.join(rgb_folder, d)) and not d.startswith('._')]
         print(f"   RGB classes found: {len(classes)}")
         if len(classes) > 0:
             sample_class = classes[0]
             sample_rgb_path = os.path.join(rgb_folder, sample_class)
-            rgb_files = [f for f in os.listdir(sample_rgb_path) if f.lower().endswith(('.jpg', '.png'))]
+            rgb_files = [f for f in os.listdir(sample_rgb_path) 
+                        if f.lower().endswith(('.jpg', '.png')) 
+                        and not f.startswith('._')]
             print(f"   Sample class: {sample_class}")
             print(f"   Sample RGB files: {rgb_files[:3]}")
     
@@ -176,7 +178,7 @@ if opt.use_rgbd:
         exists = os.path.exists(df)
         print(f"   - {df}: {exists}")
         if exists and os.path.isdir(df):
-            subdirs = [d for d in os.listdir(df) if os.path.isdir(os.path.join(df, d))]
+            subdirs = [d for d in os.listdir(df) if os.path.isdir(os.path.join(df, d)) and not d.startswith('._')]
             print(f"     └─ Subdirs: {subdirs[:5]}")
     
     image_datasets['satellite'] = RGBDSatelliteDataset(
