@@ -197,13 +197,17 @@ def extract_features_with_paths(model, dataloader, view_index=1, use_gpu=True, i
             img, label = data
             if use_gpu: img = img.cuda()
             
-            # RGB Modeli için 4 kanalı 3'e düşür
-            if not is_rgbd and img.shape[1] == 4:
-                img = img[:, :3, :, :]
-            
+            # RGBD Model: model_1 (satellite/query) expects 4 channels, model_2 (drone/gallery) expects 3 channels
+            # RGB Model: both views expect 3 channels
             if view_index == 1:
+                # Query/Satellite view - RGBD model expects 4 channels, RGB model expects 3
+                if not is_rgbd and img.shape[1] == 4:
+                    img = img[:, :3, :, :]
                 outputs, _ = model(img, None)
             else:
+                # Gallery/Drone view - both models expect 3 channels
+                if img.shape[1] == 4:
+                    img = img[:, :3, :, :]
                 _, outputs = model(None, img)
             
             fnorm = torch.norm(outputs, p=2, dim=1, keepdim=True)
