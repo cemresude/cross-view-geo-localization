@@ -286,15 +286,15 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     for ax in [ax1, ax2, ax3, ax4]: ax.axis('off')
 
     try:
-        # Create wrapper for RGB model (view 1) - returns features directly, sum for scalar gradient
+        # Create wrapper for RGB model (view 1) - returns scalar sum for gradient computation
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                # Return sum of features to get scalar for backward
-                return feat.sum(dim=1, keepdim=True)
+                # Flatten and sum to get a scalar for backward pass
+                return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM - use only 3 channels
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
@@ -318,7 +318,8 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
                 self.model_1 = model.model_1
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return feat.sum(dim=1, keepdim=True)
+                # Flatten and sum to get a scalar for backward pass
+                return feat.view(feat.size(0), -1).sum()
         
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
         
@@ -334,6 +335,8 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
         
     except Exception as e:
         print(f"Warning: GradCAM failed: {e}")
+        import traceback
+        traceback.print_exc()
         pass
 
     plt.tight_layout()
@@ -343,14 +346,15 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
 
 def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None):
     try:
-        # Wrapper classes - return feature sum for gradient computation
+        # Wrapper classes - return scalar sum for gradient computation
         class RGB_Model1_Wrapper(nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model_1 = model.model_1
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return feat.sum(dim=1, keepdim=True)
+                # Flatten and sum to get a scalar for backward pass
+                return feat.view(feat.size(0), -1).sum()
         
         class RGBD_Model1_Wrapper(nn.Module):
             def __init__(self, model):
@@ -358,7 +362,8 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
                 self.model_1 = model.model_1
             def forward(self, x, *args, **kwargs):
                 feat = self.model_1(x)
-                return feat.sum(dim=1, keepdim=True)
+                # Flatten and sum to get a scalar for backward pass
+                return feat.view(feat.size(0), -1).sum()
         
         # RGB CAM
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
@@ -397,6 +402,8 @@ def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_p
         plt.close()
     except Exception as e:
         print(f"Diff visualization failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def main():
