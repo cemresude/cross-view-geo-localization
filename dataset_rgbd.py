@@ -236,12 +236,15 @@ class RGBDSatelliteDataset(Dataset):
         clean_name = img_name[2:] if img_name.startswith('._') else img_name
         name_without_ext = os.path.splitext(clean_name)[0]
         
-        # Olası depth dosya adları
+        # Olası depth dosya adları - genişletilmiş liste
         possible_names = [
             name_without_ext + '_depth.jpg',
             name_without_ext + '_depth.png',
+            name_without_ext + '_depth.jpeg',
             name_without_ext + '.png',
             name_without_ext + '.jpg',
+            name_without_ext + '.jpeg',
+            clean_name,  # Temiz isim
             img_name,  # Orijinal isim
         ]
         
@@ -260,10 +263,25 @@ class RGBDSatelliteDataset(Dataset):
         
         # 3. Tüm kombinasyonları dene
         for folder in possible_folders:
+            if not os.path.exists(folder):
+                continue
             for name in possible_names:
                 candidate = os.path.join(folder, name)
                 if os.path.exists(candidate):
                     return candidate
+        
+        # DEBUG: İlk 3 eşleşmeme için detay göster
+        if self.missing_depth_count < 3:
+            print(f"\n   🔍 DEBUG: Depth bulunamadı - {img_name}")
+            print(f"      Clean name: {clean_name}")
+            print(f"      Aranan isimler: {possible_names[:3]}...")
+            print(f"      Aranan klasörler:")
+            for folder in possible_folders[:2]:
+                exists = os.path.exists(folder)
+                print(f"        - {folder}: {exists}")
+                if exists:
+                    actual_files = [f for f in os.listdir(folder) if not f.startswith('._')][:3]
+                    print(f"          Gerçek dosyalar: {actual_files}")
         
         return None
     

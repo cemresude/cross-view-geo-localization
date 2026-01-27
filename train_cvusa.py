@@ -166,6 +166,16 @@ if opt.use_rgbd:
                         and not f.startswith('._')]
             print(f"   Sample class: {sample_class}")
             print(f"   Sample RGB files: {rgb_files[:3]}")
+            
+            # Also check depth files for same class
+            depth_sample_path = os.path.join(depth_root, 'satellite_depth', sample_class)
+            if os.path.exists(depth_sample_path):
+                depth_files = [f for f in os.listdir(depth_sample_path) 
+                              if f.lower().endswith(('.jpg', '.png'))
+                              and not f.startswith('._')]
+                print(f"   Sample depth files: {depth_files[:3]}")
+            else:
+                print(f"   ⚠️ Depth folder not found for class {sample_class}")
     
     # Depth klasörlerini kontrol et
     possible_depth_folders = [
