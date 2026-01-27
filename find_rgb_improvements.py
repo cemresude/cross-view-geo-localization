@@ -286,17 +286,34 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
     for ax in [ax1, ax2, ax3, ax4]: ax.axis('off')
 
     try:
-        # RGB CAM
+        # RGB CAM - use only 3 channels
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
+        if rgb_tensor.shape[1] == 4:
+            rgb_tensor = rgb_tensor[:, :3, :, :]
         target_layer_rgb = get_target_layer(rgb_model.model_1)
         rgb_gradcam = GradCAM(rgb_model, target_layer_rgb)
         rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
         ax6 = fig.add_subplot(gs[1, 1]); ax6.imshow(rgb_cam, cmap='jet'); ax6.set_title('RGB Attention'); ax6.axis('off')
 
-        # RGBD CAM
+        # RGBD CAM - need to use model_1 directly for proper 4-channel handling
         rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
         target_layer_rgbd = get_target_layer(rgbd_model.model_1)
-        rgbd_gradcam = GradCAM(rgbd_model, target_layer_rgbd)
+        # Create a wrapper that only uses model_1 for RGBD
+        class RGBD_Model1_Wrapper(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model_1 = model.model_1
+                self.classifier = model.classifier
+            def forward(self, x):
+                feat = self.model_1(x)
+                return self.classifier.classifier(feat)
+        
+        rgbd_wrapper = RGBD_Model1_Wrapper(rgbd_model)
+        if torch.cuda.is_available():
+            rgbd_wrapper = rgbd_wrapper.cuda()
+        rgbd_wrapper.eval()
+        
+        rgbd_gradcam = GradCAM(rgbd_wrapper, target_layer_rgbd)
         rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
         ax10 = fig.add_subplot(gs[2, 1]); ax10.imshow(rgbd_cam, cmap='jet'); ax10.set_title('RGBD Attention'); ax10.axis('off')
         
@@ -311,16 +328,34 @@ def visualize_improvement_case(rgb_model, rgbd_model, query_path, gallery_paths,
 
 def attention_difference_visualization(rgb_model, rgbd_model, query_path, save_path=None):
     try:
+        # RGB CAM
         rgb_tensor, _ = preprocess_image(query_path, use_rgbd=False)
-        rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
+        if rgb_tensor.shape[1] == 4:
+            rgb_tensor = rgb_tensor[:, :3, :, :]
         
         target_layer_rgb = get_target_layer(rgb_model.model_1)
+        rgb_gradcam = GradCAM(rgb_model, target_layer_rgb)
+        rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
+        
+        # RGBD CAM - use wrapper for proper 4-channel handling
+        rgbd_tensor, _ = preprocess_image(query_path, use_rgbd=True)
         target_layer_rgbd = get_target_layer(rgbd_model.model_1)
         
-        rgb_gradcam = GradCAM(rgb_model, target_layer_rgb)
-        rgbd_gradcam = GradCAM(rgbd_model, target_layer_rgbd)
+        class RGBD_Model1_Wrapper(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model_1 = model.model_1
+                self.classifier = model.classifier
+            def forward(self, x):
+                feat = self.model_1(x)
+                return self.classifier.classifier(feat)
         
-        rgb_cam = rgb_gradcam.generate_cam(rgb_tensor)
+        rgbd_wrapper = RGBD_Model1_Wrapper(rgbd_model)
+        if torch.cuda.is_available():
+            rgbd_wrapper = rgbd_wrapper.cuda()
+        rgbd_wrapper.eval()
+        
+        rgbd_gradcam = GradCAM(rgbd_wrapper, target_layer_rgbd)
         rgbd_cam = rgbd_gradcam.generate_cam(rgbd_tensor)
         
         diff = rgbd_cam - rgb_cam
