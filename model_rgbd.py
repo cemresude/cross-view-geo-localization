@@ -12,6 +12,32 @@ from torch.nn import init
 from torchvision import models
 
 ######################################################################
+# GeM Pooling Layer (Generalized Mean Pooling)
+class GeM(nn.Module):
+    # GeM zhedong zheng
+    def __init__(self, dim=2048, p=3, eps=1e-6):
+        super(GeM, self).__init__()
+        self.p = nn.Parameter(torch.ones(dim)*p, requires_grad=True)  # initial p
+        self.eps = eps
+        self.dim = dim
+
+    def forward(self, x):
+        return self.gem(x, p=self.p, eps=self.eps)
+
+    def gem(self, x, p=3, eps=1e-6):
+        x = torch.transpose(x, 1, -1)
+        x = x.clamp(min=eps).pow(p)
+        x = torch.transpose(x, 1, -1)
+        x = F.avg_pool2d(x, (x.size(-2), x.size(-1)))
+        x = x.view(x.size(0), x.size(1))
+        x = x.pow(1./p)
+        return x
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + 'p=' + '{:.4f}'.format(self.p.data.tolist()[0]) + ', ' + 'eps=' + str(self.eps) + ',' + 'dim=' + str(self.dim) + ')'
+
+
+######################################################################
 # 4-channel input adapter
 def convert_conv1_to_4channel(model):
     """
@@ -65,6 +91,8 @@ class ft_net_rgbd(nn.Module):
         # Pooling layers
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.maxpool = nn.AdaptiveMaxPool2d((1,1))
+        if pool == 'gem':
+            self.gem = GeM(dim=2048)
 
     def forward(self, x):
         x = self.model.conv1(x)
@@ -85,6 +113,8 @@ class ft_net_rgbd(nn.Module):
             x = self.avgpool(x)
         elif self.pool == 'max':
             x = self.maxpool(x)
+        elif self.pool == 'gem':
+            x = self.gem(x)
         
         x = x.view(x.size(0), -1)
         return x
