@@ -22,6 +22,7 @@ import copy
 import time
 import os
 from model import two_view_net, three_view_net
+from model_rgbd import two_view_net_rgbd
 from random_erasing import RandomErasing
 from autoaugment import ImageNetPolicy, CIFAR10Policy
 import yaml
@@ -57,12 +58,19 @@ parser.add_argument('--pool', default='avg', type=str, help='pool avg')
 parser.add_argument('--stride', default=2, type=int, help='stride')
 parser.add_argument('--use_dense', action='store_true', help='use densenet121')
 parser.add_argument('--use_NAS', action='store_true', help='use NAS')
+parser.add_argument('--use_vgg16', action='store_true', help='use VGG16 backbone')
+# RGBD
+parser.add_argument('--use_rgbd', action='store_true', help='use RGBD (4-channel) input for satellite images')
+parser.add_argument('--depth_dir', default=None, type=str, help='separate depth folder root (e.g., /data/depth/train). If None, uses data_dir')
+# LPN (use with --pool lpn)
+parser.add_argument('--lpn_blocks', default=4, type=int, help='number of LPN blocks (must be perfect square for square mode)')
+parser.add_argument('--lpn_mode', default='square', type=str, help='LPN split mode: square or horizontal')
 #optimizer
 parser.add_argument('--warm_epoch', default=0, type=int, help='the first K epoch that needs warm up')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
 parser.add_argument('--moving_avg', default=1.0, type=float, help='moving average')
-parser.add_argument('--fp16', action='store_true',help='use float16 instead of float32, which will save about 50% memory')
-parser.add_argument('--bf16', action='store_true',help='use bfloat16 instead of float32, which will save about 50% memory')
+parser.add_argument('--fp16', action='store_true',help='use float16 instead of float32, which will save about 50%% memory')
+parser.add_argument('--bf16', action='store_true',help='use bfloat16 instead of float32, which will save about 50%% memory')
 # extra losses (default is cross-entropy loss. You can fuse different losses for further performance boost.)
 parser.add_argument('--arcface', action='store_true', help='use ArcFace loss')
 parser.add_argument('--circle', action='store_true', help='use Circle loss')
@@ -153,8 +161,27 @@ if opt.train_all:
     train_all = '_all'
 
 image_datasets = {}
-image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
-                                                   data_transforms['satellite'])
+
+# RGBD or RGB dataset for satellite
+if opt.use_rgbd:
+    print("🌈 Using RGBD (4-channel) dataset for satellite images")
+    from dataset_rgbd import RGBDSatelliteDataset
+    depth_root = opt.depth_dir if opt.depth_dir else data_dir
+    print(f"   RGB folder:   {os.path.join(data_dir, 'satellite')}")
+    print(f"   Depth root:   {depth_root}")
+    image_datasets['satellite'] = RGBDSatelliteDataset(
+        rgb_folder=os.path.join(data_dir, 'satellite'),
+        depth_folder=os.path.join(data_dir, 'satellite_depth'),
+        transform=data_transforms['satellite'],
+        depth_root=depth_root
+    )
+    if len(image_datasets['satellite']) == 0:
+        raise RuntimeError("RGBD dataset is empty! Depth files not found. Check --depth_dir.")
+else:
+    print("🔵 Using RGB (3-channel) dataset for satellite images")
+    image_datasets['satellite'] = datasets.ImageFolder(os.path.join(data_dir, 'satellite'),
+                                                       data_transforms['satellite'])
+
 image_datasets['drone'] = datasets.ImageFolder(os.path.join(data_dir, 'drone'),
                                                data_transforms['train'])
 
@@ -519,12 +546,23 @@ def draw_curve(current_epoch):
 
 return_feature = opt.arcface or opt.cosface or opt.circle or opt.triplet or opt.contrast or opt.lifted or opt.sphere
 
+# Build LPN kwargs if pool is lpn
+lpn_kwargs = {}
+if opt.pool == 'lpn':
+    lpn_kwargs = {'lpn_blocks': opt.lpn_blocks, 'lpn_mode': opt.lpn_mode}
+    print(f"📐 Using LPN pooling: blocks={opt.lpn_blocks}, mode={opt.lpn_mode}")
+
 if opt.views == 2:
-    model = two_view_net(len(class_names), droprate=opt.droprate, stride=opt.stride, pool=opt.pool,
-                         share_weight=opt.share, circle=return_feature)
+    if opt.use_rgbd:
+        print("🌈 Initializing RGBD two-view model")
+        model = two_view_net_rgbd(len(class_names), droprate=opt.droprate, stride=opt.stride,
+                                  pool=opt.pool, share_weight=opt.share, **lpn_kwargs)
+    else:
+        model = two_view_net(len(class_names), droprate=opt.droprate, stride=opt.stride, pool=opt.pool,
+                             share_weight=opt.share, circle=return_feature, VGG16=opt.use_vgg16, **lpn_kwargs)
 elif opt.views == 3:
     model = three_view_net(len(class_names), droprate=opt.droprate, stride=opt.stride, pool=opt.pool,
-                           share_weight=opt.share, circle=return_feature)
+                           share_weight=opt.share, circle=return_feature, VGG16=opt.use_vgg16)
 
 opt.nclasses = len(class_names)
 

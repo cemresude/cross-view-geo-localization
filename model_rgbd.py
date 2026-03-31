@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Model with RGBD (4-channel) input support using MiDaS depth maps
+Includes LPN (Local Pattern Network) support.
 """
 
 from __future__ import print_function, division
@@ -10,6 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 from torchvision import models
+
+# Import LPN classes from model.py (no duplication)
+from model import LPN, LPNBlock
 
 ######################################################################
 # GeM Pooling Layer (Generalized Mean Pooling)
@@ -68,8 +72,9 @@ class ft_net_rgbd(nn.Module):
     """
     ResNet50 with 4-channel (RGBD) input configuration
     Structured like ft_net with .model and .pool attributes
+    Supports pool='lpn' with kwargs: lpn_blocks, lpn_mode, lpn_pool
     """
-    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg'):
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', **kwargs):
         super(ft_net_rgbd, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         
@@ -89,10 +94,16 @@ class ft_net_rgbd(nn.Module):
         self.pool = pool
         
         # Pooling layers
-        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
-        self.maxpool = nn.AdaptiveMaxPool2d((1,1))
-        if pool == 'gem':
-            self.gem = GeM(dim=2048)
+        if pool == 'lpn':
+            lpn_blocks = kwargs.get('lpn_blocks', 4)
+            lpn_mode = kwargs.get('lpn_mode', 'square')
+            lpn_pool = kwargs.get('lpn_pool', 'avg')
+            self.lpn = LPN(num_blocks=lpn_blocks, mode=lpn_mode, pool=lpn_pool)
+        else:
+            self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+            self.maxpool = nn.AdaptiveMaxPool2d((1,1))
+            if pool == 'gem':
+                self.gem = GeM(dim=2048)
 
     def forward(self, x):
         x = self.model.conv1(x)
@@ -115,6 +126,9 @@ class ft_net_rgbd(nn.Module):
             x = self.maxpool(x)
         elif self.pool == 'gem':
             x = self.gem(x)
+        elif self.pool == 'lpn':
+            x = self.lpn(x)
+            return x
         
         x = x.view(x.size(0), -1)
         return x
@@ -178,11 +192,11 @@ class ClassBlock(nn.Module):
 
 # Two-view network with RGBD
 class two_view_net_rgbd(nn.Module):
-    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, VGG16=False):
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, VGG16=False, **kwargs):
         super(two_view_net_rgbd, self).__init__()
         
         # Satellite: RGBD (4 channels)
-        self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool)
+        self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool, **kwargs)
         
         # Drone: standard 3-channel RGB input
         if VGG16:
@@ -190,13 +204,19 @@ class two_view_net_rgbd(nn.Module):
             self.model_2 = ft_net_VGG16(class_num, droprate=droprate, stride=stride, pool=pool)
         else:
             from model import ft_net
-            self.model_2 = ft_net(class_num, droprate=droprate, stride=stride, pool=pool)
+            self.model_2 = ft_net(class_num, droprate=droprate, stride=stride, pool=pool, **kwargs)
         
-        # Shared classifier
-        if pool == 'avg+max':
-            self.classifier = ClassBlock(4096, class_num, droprate)
+        # Compute classifier input dimension
+        if pool == 'lpn':
+            lpn_blocks = kwargs.get('lpn_blocks', 4)
+            feat_dim = 2048 * lpn_blocks
+        elif pool == 'avg+max':
+            feat_dim = 4096
         else:
-            self.classifier = ClassBlock(2048, class_num, droprate)
+            feat_dim = 2048
+
+        # Shared classifier
+        self.classifier = ClassBlock(feat_dim, class_num, droprate)
         
         self.share_weight = share_weight
         # Note: share_weight is not used here since satellite (4ch) and drone (3ch) 
@@ -223,3 +243,58 @@ class two_view_net_rgbd(nn.Module):
                 out2 = self.classifier(out2)
         
         return out1, out2
+
+
+######################################################################
+# Test block
+if __name__ == '__main__':
+    import numpy as np
+    
+    print("=" * 60)
+    print("Testing two_view_net_rgbd with LPN")
+    print("=" * 60)
+    
+    # Instantiate with LPN pooling
+    net = two_view_net_rgbd(
+        class_num=701,
+        droprate=0.5,
+        stride=2,
+        pool='lpn',
+        lpn_blocks=4,
+        lpn_mode='square'
+    )
+    net.train()  # training mode to test classifier path
+    
+    # Create dummy inputs
+    # Satellite: 4-channel RGBD input
+    x_sat = torch.randn(4, 4, 256, 256)
+    # Drone: 3-channel RGB input
+    x_drone = torch.randn(4, 3, 256, 256)
+    
+    print(f"\nSatellite input shape:  {x_sat.shape}")
+    print(f"Drone input shape:     {x_drone.shape}")
+    
+    # Forward pass (training mode — classifier applied)
+    out1, out2 = net(x_sat, x_drone)
+    print(f"\n[Training mode]")
+    print(f"Satellite output shape: {out1.shape}")
+    print(f"Drone output shape:     {out2.shape}")
+    
+    # Test eval mode (no classifier)
+    net.eval()
+    with torch.no_grad():
+        out1_eval, out2_eval = net(x_sat, x_drone)
+    print(f"\n[Eval mode]")
+    print(f"Satellite output shape: {out1_eval.shape}")
+    print(f"Drone output shape:     {out2_eval.shape}")
+    
+    # Test with None inputs
+    net.train()
+    out1_only, out2_none = net(x_sat, None)
+    print(f"\n[Satellite only]")
+    print(f"Satellite output shape: {out1_only.shape}")
+    print(f"Drone output:           {out2_none}")
+    
+    print("\n" + "=" * 60)
+    print("All tests passed!")
+    print("=" * 60)

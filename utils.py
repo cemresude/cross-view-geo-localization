@@ -104,15 +104,24 @@ def load_network(name, opt):
     # VGG16 support
     opt.use_vgg16 = config.get('use_vgg16', False)
 
+    # LPN support
+    opt.lpn_blocks = config.get('lpn_blocks', 4)
+    opt.lpn_mode = config.get('lpn_mode', 'square')
+
+    # Build LPN kwargs
+    lpn_kwargs = {}
+    if opt.pool == 'lpn':
+        lpn_kwargs = {'lpn_blocks': opt.lpn_blocks, 'lpn_mode': opt.lpn_mode}
+
     model = None
 
     if opt.use_rgbd and opt.views == 2:
         # RGBD two-view model
         print("🌈 Loading RGBD two-view model")
-        model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share)
+        model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, **lpn_kwargs)
     elif opt.views == 2:
         # Standard RGB two-view model
-        model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
+        model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16, **lpn_kwargs)
     elif opt.views == 3:
         model = three_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16)
 

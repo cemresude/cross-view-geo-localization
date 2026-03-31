@@ -1,0 +1,266 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[turkish]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\geometry{left=2.2cm,right=2.2cm,top=2.2cm,bottom=2.2cm}
+
+\title{University1652-Fork\\Dosya Özeti (LaTeX)}
+\author{Otomatik Proje Envanteri}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Amaç}
+Bu doküman, \texttt{University1652-Fork} çalışma alanındaki dosya ve klasörlerin kısa görev özetini verir.
+Odak: dosya bazında ``ne işe yarıyor?'' sorusuna hızlı yanıt.
+
+\section*{Kök Dizin Dosyaları}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endhead
+
+autoaugment.py & Veri artırma (AutoAugment benzeri) politikaları; eğitimde çeşitlilik sağlar. \\
+\hline
+circle_loss.py & Metric learning için Circle Loss implementasyonu. \\
+\hline
+colab_full_pipeline.py & Colab ortamında uçtan uca eğitim/değerlendirme akışını çalıştırma betiği. \\
+\hline
+COLAB_SATELLITE_DRONE.ipynb & Colab notebook; deney, görselleştirme ve hızlı test için etkileşimli akış. \\
+\hline
+compare_gradcam.py & Farklı model/konfigürasyonların Grad-CAM çıktılarını karşılaştırma. \\
+\hline
+compare_models.py & Modellerin metrik ve/veya tahmin bazlı kıyaslaması. \\
+\hline
+dataset_rgbd.py & RGB+Depth (4 kanal) veri yükleme/dönüştürme mantığı. \\
+\hline
+demo.py & Standart çözünürlükte örnek çıkarım/demo çalıştırma. \\
+\hline
+demo_4K.py & 4K görseller için demo/çıkarım akışı. \\
+\hline
+evaluate_gpu.py & GPU üzerinde değerlendirme (retrieval/accuracy) betiği. \\
+\hline
+find_rgb_improvements.py & RGB ve RGBD sonuçlarını karşılaştırıp iyileşen örnekleri bulma ve görselleştirme. \\
+\hline
+folder.py & Veri klasörlerini organize etme/okuma yardımcıları. \\
+\hline
+gallery_name.txt & Gallery görsel isim listesi. \\
+\hline
+gradcam_visualization.py & Grad-CAM üretimi, ön işleme ve ısı haritası bindirme yardımcıları. \\
+\hline
+LICENSE & Lisans metni. \\
+\hline
+model.py & Temel model tanımları (ResNet/VGG tabanlı, GeM dahil, iki/üç görünüm ağları). \\
+\hline
+model_rgbd.py & RGBD modeli (4 kanallı giriş), RGB ve RGBD iki görünüm mimarisi. \\
+\hline
+new_name_list.txt & Yeniden adlandırılmış/işlenmiş dosya isim listesi. \\
+\hline
+prepare_cvusa.py & CVUSA veri hazırlık/ön işleme betiği. \\
+\hline
+prepare_limit_view.py & Görüş açısı/sahne kısıtlı veri hazırlama adımları. \\
+\hline
+query_name.txt & Query görsel isim listesi. \\
+\hline
+random_erasing.py & Random Erasing veri artırma implementasyonu. \\
+\hline
+README.md & Projenin genel açıklaması ve kullanım özeti. \\
+\hline
+README_GRADCAM.md & Grad-CAM kullanım/dokümantasyon notları. \\
+\hline
+README_RGBD.md & RGBD eğitim/değerlendirme açıklamaları. \\
+\hline
+Request.md & İstek/notlar veya görev tanımı dokümanı. \\
+\hline
+requirement.txt & Python bağımlılık listesi (requirements). \\
+\hline
+show_data.py & Veri örneklerini görselleştirme/inceleme aracı. \\
+\hline
+technical_documentation.tex & Ayrıntılı teknik dokümantasyon (teori + mimari + pipeline). \\
+\hline
+test.py & Genel test/evaluation giriş betiği. \\
+\hline
+test_160k.py & 160k veri/konfigürasyon için test betiği. \\
+\hline
+test_4K.py & 4K veri üstünde test/değerlendirme. \\
+\hline
+test_cvusa.py & CVUSA özel test scripti. \\
+\hline
+test_ImageNet.py & ImageNet benzeri akışta test/deneme betiği. \\
+\hline
+test_Place365.py & Place365 benzeri akışta test/deneme betiği. \\
+\hline
+test_train.py & Eğitim doğrulama/test kontrol scripti. \\
+\hline
+train.py & Ana eğitim scripti. \\
+\hline
+train_1_sample.py & Çok küçük örnekle (1 örnek) debug eğitim akışı. \\
+\hline
+train_3_sample.py & 3 örnekle hızlı debug eğitim akışı. \\
+\hline
+train_9_sample.py & 9 örnekle hızlı debug eğitim akışı. \\
+\hline
+train_18_sample.py & 18 örnekle hızlı debug eğitim akışı. \\
+\hline
+train_27_sample.py & 27 örnekle hızlı debug eğitim akışı. \\
+\hline
+train_baseline_rgb.sh & RGB baseline eğitim komutlarını içeren shell script. \\
+\hline
+train_cvusa.py & CVUSA veri seti için eğitim scripti. \\
+\hline
+train_no_street.py & Sokak görünümü hariç/sınırlı veriyle eğitim deneyi. \\
+\hline
+train_rgbd.sh & RGBD eğitim komutlarını içeren shell script. \\
+\hline
+TRAINING_GUIDE.md & Eğitim adımları ve pratik öneriler. \\
+\hline
+utils.py & Ortak yardımcı fonksiyonlar (I/O, metrik, vb.). \\
+\hline
+\end{longtable}
+
+\section*{Alt Klasörler ve İçerikleri}
+\subsection*{docs/}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya/Klasör} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya/Klasör} & \textbf{Özet} \\
+\hline
+\endhead
+
+docs/index.html & Dokümantasyon ana HTML sayfası. \\
+\hline
+docs/index_files/ & HTML için yardımcı statik dosyalar. \\
+\hline
+docs/index_files/bibtex_cvpr2019.txt & CVPR 2019 bibtex referansı. \\
+\hline
+\end{longtable}
+
+\subsection*{GPU-Re-Ranking/}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya/Klasör} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya/Klasör} & \textbf{Özet} \\
+\hline
+\endhead
+
+GPU-Re-Ranking/evaluate_rerank_gpu.py & GPU tabanlı re-ranking değerlendirmesi. \\
+\hline
+GPU-Re-Ranking/gnn_reranking.py & GNN tabanlı re-ranking algoritması. \\
+\hline
+GPU-Re-Ranking/utils.py & Re-ranking yardımcı fonksiyonları. \\
+\hline
+GPU-Re-Ranking/README.md & Re-ranking modülü kullanımı. \\
+\hline
+GPU-Re-Ranking/extension/make.sh & CUDA/C++ extension derleme scripti. \\
+\hline
+GPU-Re-Ranking/extension/adjacency_matrix/build_adjacency_matrix.cpp & Adjacency matrix extension (C++ köprüsü). \\
+\hline
+GPU-Re-Ranking/extension/adjacency_matrix/build_adjacency_matrix_kernel.cu & Adjacency matrix CUDA kernel. \\
+\hline
+GPU-Re-Ranking/extension/adjacency_matrix/setup.py & Adjacency extension kurulum dosyası. \\
+\hline
+GPU-Re-Ranking/extension/propagation/gnn_propagate.cpp & GNN propagate extension (C++ köprüsü). \\
+\hline
+GPU-Re-Ranking/extension/propagation/gnn_propagate_kernel.cu & GNN propagation CUDA kernel. \\
+\hline
+GPU-Re-Ranking/extension/propagation/setup.py & Propagation extension kurulum dosyası. \\
+\hline
+\end{longtable}
+
+\subsection*{SIFT/}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endhead
+
+SIFT/demo_sift.m & MATLAB SIFT demo dosyası. \\
+\hline
+SIFT/README.md & SIFT modülü açıklaması. \\
+\hline
+\end{longtable}
+
+\subsection*{State-of-the-art/}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endhead
+
+State-of-the-art/README.md & Literatür/karşılaştırmalı sonuç notları. \\
+\hline
+\end{longtable}
+
+\subsection*{tool/ ve tutorial/}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya} & \textbf{Özet} \\
+\hline
+\endhead
+
+tool/clear_model.py & Eski/ağır model dosyalarını temizleme aracı. \\
+\hline
+tutorial/README.md & Hızlı başlangıç/eğitim öğretici notları. \\
+\hline
+\end{longtable}
+
+\subsection*{Varlık ve Veri Klasörleri}
+\begin{longtable}{|p{0.34\textwidth}|p{0.60\textwidth}|}
+\hline
+\textbf{Klasör} & \textbf{Özet} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Klasör} & \textbf{Özet} \\
+\hline
+\endhead
+
+image_4K/00..11 & 4K örnek görüntü klasörleri (demo/test girdileri). \\
+\hline
+model/use_rgbd/net_059.pth & RGBD eğitim checkpoint ağırlığı. \\
+\hline
+model/use_rgbd/net_079.pth & RGBD eğitim checkpoint ağırlığı. \\
+\hline
+model/use_rgbd/net_099.pth & RGBD eğitim checkpoint ağırlığı. \\
+\hline
+__pycache__/ & Python bytecode önbellek dosyaları. \\
+\hline
+\end{longtable}
+
+\section*{Notlar}
+\begin{itemize}
+    \item Bu özet, çalışma alanında görünen dosya ağacına göre hazırlanmıştır.
+    \item Bazı scriptler benzer amaçlı varyasyonlardır (ör. farklı veri seti, örnek sayısı veya çözünürlük).
+    \item En güncel ve ayrıntılı teorik bilgi için \texttt{technical\_documentation.tex} dosyasına bakın.
+\end{itemize}
+
+\end{document}

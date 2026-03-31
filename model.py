@@ -28,6 +28,76 @@ class GeM(nn.Module):
     def __repr__(self):
         return self.__class__.__name__ + '(' + 'p=' + '{:.4f}'.format(self.p.data.tolist()[0]) + ', ' + 'eps=' + str(self.eps) + ',' + 'dim='+str(self.dim)+')'
 
+######################################################################
+# LPN - Local Pattern Network
+class LPNBlock(nn.Module):
+    """Pools a single spatial region using avg, max, or GeM pooling."""
+    def __init__(self, pool='avg'):
+        super(LPNBlock, self).__init__()
+        if pool == 'avg':
+            self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        elif pool == 'max':
+            self.pool = nn.AdaptiveMaxPool2d((1, 1))
+        elif pool == 'gem':
+            self.pool = GeM(dim=2048)
+        else:
+            raise ValueError(f"Unknown LPN pool type: {pool}")
+
+    def forward(self, x):
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        return x
+
+
+class LPN(nn.Module):
+    """
+    Local Pattern Network.
+    Splits the feature map into num_blocks regions using either:
+      - 'square': sqrt(N) x sqrt(N) grid
+      - 'horizontal': N horizontal strips
+    Pools each region and concatenates the results.
+    Output shape: (B, 2048 * num_blocks)
+    """
+    def __init__(self, num_blocks=4, mode='square', pool='avg'):
+        super(LPN, self).__init__()
+        self.num_blocks = num_blocks
+        self.mode = mode
+        self.blocks = nn.ModuleList([LPNBlock(pool=pool) for _ in range(num_blocks)])
+
+    def forward(self, x):
+        # x: (B, C, H, W)
+        parts = []
+        if self.mode == 'square':
+            n = int(self.num_blocks ** 0.5)
+            assert n * n == self.num_blocks, \
+                f"For 'square' mode, num_blocks must be a perfect square, got {self.num_blocks}"
+            _, _, H, W = x.size()
+            h_step = H // n
+            w_step = W // n
+            idx = 0
+            for i in range(n):
+                for j in range(n):
+                    h_start = i * h_step
+                    h_end = H if i == n - 1 else (i + 1) * h_step
+                    w_start = j * w_step
+                    w_end = W if j == n - 1 else (j + 1) * w_step
+                    region = x[:, :, h_start:h_end, w_start:w_end]
+                    parts.append(self.blocks[idx](region))
+                    idx += 1
+        elif self.mode == 'horizontal':
+            _, _, H, W = x.size()
+            h_step = H // self.num_blocks
+            for i in range(self.num_blocks):
+                h_start = i * h_step
+                h_end = H if i == self.num_blocks - 1 else (i + 1) * h_step
+                region = x[:, :, h_start:h_end, :]
+                parts.append(self.blocks[i](region))
+        else:
+            raise ValueError(f"Unknown LPN mode: {self.mode}")
+
+        return torch.cat(parts, dim=1)
+
+
 def weights_init_kaiming(m):
     classname = m.__class__.__name__
     # print(classname)
@@ -141,7 +211,7 @@ class ft_net_VGG16(nn.Module):
 # Define the ResNet50-based Model
 class ft_net(nn.Module):
 
-    def __init__(self, class_num, droprate=0.5, stride=2, init_model=None, pool='avg'):
+    def __init__(self, class_num, droprate=0.5, stride=2, init_model=None, pool='avg', **kwargs):
         super(ft_net, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         # avg pooling to global pooling
@@ -161,6 +231,11 @@ class ft_net(nn.Module):
             model_ft.maxpool2 = nn.AdaptiveMaxPool2d((1,1))
         elif pool=='gem':
             model_ft.gem2 = GeM(dim=2048)
+        elif pool=='lpn':
+            lpn_blocks = kwargs.get('lpn_blocks', 4)
+            lpn_mode = kwargs.get('lpn_mode', 'square')
+            lpn_pool = kwargs.get('lpn_pool', 'avg')
+            self.lpn = LPN(num_blocks=lpn_blocks, mode=lpn_mode, pool=lpn_pool)
 
         self.model = model_ft
 
@@ -188,31 +263,41 @@ class ft_net(nn.Module):
             x = self.model.maxpool2(x)
         elif self.pool == 'gem':
             x = self.model.gem2(x)
+        elif self.pool == 'lpn':
+            x = self.lpn(x)
+            return x
 
         x = x.view(x.size(0), x.size(1))
         #x = self.classifier(x)
         return x
 
 class two_view_net(nn.Module):
-    def __init__(self, class_num, droprate, stride = 2, pool = 'avg', share_weight = False, VGG16=False, circle=False,):
+    def __init__(self, class_num, droprate, stride = 2, pool = 'avg', share_weight = False, VGG16=False, circle=False, **kwargs):
         super(two_view_net, self).__init__()
         if VGG16:
             self.model_1 =  ft_net_VGG16(class_num, stride=stride, pool = pool)
         else:
-            self.model_1 =  ft_net(class_num, stride=stride, pool = pool)
+            self.model_1 =  ft_net(class_num, stride=stride, pool = pool, **kwargs)
         if share_weight:
             self.model_2 = self.model_1
         else:
             if VGG16:
                 self.model_2 =  ft_net_VGG16(class_num, stride = stride, pool = pool)
             else:
-                self.model_2 =  ft_net(class_num, stride = stride, pool = pool)
+                self.model_2 =  ft_net(class_num, stride = stride, pool = pool, **kwargs)
 
         self.circle = circle
 
-        self.classifier = ClassBlock(2048, class_num, droprate, return_f = circle)
-        if pool =='avg+max':
-            self.classifier = ClassBlock(4096, class_num, droprate, return_f = circle)
+        # Compute classifier input dimension
+        if pool == 'lpn':
+            lpn_blocks = kwargs.get('lpn_blocks', 4)
+            feat_dim = 2048 * lpn_blocks
+        elif pool == 'avg+max':
+            feat_dim = 4096
+        else:
+            feat_dim = 2048
+
+        self.classifier = ClassBlock(feat_dim, class_num, droprate, return_f = circle)
         if VGG16:
             self.classifier = ClassBlock(512, class_num, droprate, return_f = circle)
             if pool =='avg+max':
