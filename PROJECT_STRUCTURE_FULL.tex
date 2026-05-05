@@ -1,0 +1,323 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[turkish]{babel}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\geometry{left=2.0cm,right=2.0cm,top=2.0cm,bottom=2.0cm}
+
+\title{Cross-View Geo-Localization\\Tam Proje Yapısı Özeti (Ayrıntılı)}
+\author{Otomatik Envanter ve Mimari Özeti}
+\date{4 Nisan 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Kapsam ve Amaç}
+Bu doküman, çalışma alanındaki \textbf{tüm görünen dosya yapısını} teknik olarak özetler:
+\begin{itemize}
+    \item Mimari katmanlar (model, eğitim, test, görselleştirme, yardımcı modüller),
+    \item Her ana dosya grubunun görevi,
+    \item Eğitim/değerlendirme akışlarının haritalanması,
+    \item Ek bölümde \textbf{.git hariç tam dosya listesi}.
+\end{itemize}
+
+\section{Depo Profili (Anlık Envanter)}
+\begin{itemize}
+    \item Toplam dosya (\texttt{.git} hariç): \textbf{102}
+    \item Toplam klasör (\texttt{.git} hariç): \textbf{25}
+    \item Python dosyası: \textbf{40}
+    \item Markdown dosyası: \textbf{9}
+    \item LaTeX dosyası: \textbf{2}
+    \item Notebook dosyası: \textbf{2}
+    \item Görsel varlık: \textbf{31} (png/jpg)
+\end{itemize}
+
+\subsection*{Dosya Türü Dağılımı}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Uzantı/Tür & Adet \\
+\midrule
+py & 40 \\
+md & 9 \\
+tex & 2 \\
+ipynb & 2 \\
+sh & 3 \\
+cpp & 2 \\
+cu & 2 \\
+txt & 5 \\
+png & 27 \\
+jpg & 4 \\
+html & 1 \\
+m & 1 \\
+.gitignore/.gitkeep/.DS\_Store vb. & 4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Sistem Mimarisi (Fonksiyonel Katmanlar)}
+\subsection{1) Model Katmanı}
+\begin{itemize}
+    \item \texttt{model.py}: Temel ağ bileşenleri (\texttt{GeM}, \texttt{ClassBlock}, \texttt{ft\_net}, \texttt{two\_view\_net}, \texttt{three\_view\_net}).
+    \item \texttt{model\_rgbd.py}: RGBD varyantı (\texttt{convert\_conv1\_to\_4channel}, \texttt{ft\_net\_rgbd}, \texttt{two\_view\_net\_rgbd}).
+    \item \texttt{circle\_loss.py}: Metric learning odaklı \texttt{CircleLoss} implementasyonu.
+\end{itemize}
+
+\subsection{2) Veri Katmanı}
+\begin{itemize}
+    \item \texttt{folder.py}: torchvision benzeri veri klasörü okuma altyapısı.
+    \item \texttt{dataset\_rgbd.py}: CVUSA/CVUSA-RGBD veri seti sınıfları ve RGB+Depth birleştirme.
+    \item \texttt{prepare\_cvusa.py}, \texttt{prepare\_limit\_view.py}: veri hazırlama/ön işleme scriptleri.
+\end{itemize}
+
+\subsection{3) Eğitim Katmanı}
+\begin{itemize}
+    \item Ana eğitim: \texttt{train.py}, \texttt{train\_cvusa.py}
+    \item Deneysel varyantlar: \texttt{train\_no\_street.py}, \texttt{train\_1\_sample.py}, \texttt{train\_3\_sample.py}, \texttt{train\_9\_sample.py}, \texttt{train\_18\_sample.py}, \texttt{train\_27\_sample.py}
+    \item Çalıştırma scriptleri: \texttt{train\_baseline\_rgb.sh}, \texttt{train\_rgbd.sh}
+\end{itemize}
+
+\subsection{4) Test ve Değerlendirme Katmanı}
+\begin{itemize}
+    \item Genel test: \texttt{test.py}, \texttt{test\_train.py}
+    \item Dataset/ölçek özel testler: \texttt{test\_cvusa.py}, \texttt{test\_4K.py}, \texttt{test\_160k.py}, \texttt{test\_ImageNet.py}, \texttt{test\_Place365.py}
+    \item Metrik değerlendirme: \texttt{evaluate\_gpu.py}
+\end{itemize}
+
+\subsection{5) Görselleştirme ve Analiz Katmanı}
+\begin{itemize}
+    \item Demo: \texttt{demo.py}, \texttt{demo\_4K.py}
+    \item Grad-CAM: \texttt{gradcam\_visualization.py}, \texttt{compare\_gradcam.py}
+    \item Model karşılaştırma: \texttt{compare\_models.py}
+    \item RGBD iyileşme analizi: \texttt{find\_rgb\_improvements.py}
+    \item Veri gösterimi: \texttt{show\_data.py}
+\end{itemize}
+
+\subsection{6) Re-ranking (GPU GNN) Alt Sistemi}
+\begin{itemize}
+    \item \texttt{GPU-Re-Ranking/gnn\_reranking.py}: GNN tabanlı yeniden sıralama.
+    \item \texttt{GPU-Re-Ranking/evaluate\_rerank\_gpu.py}: performans ve metrik değerlendirme.
+    \item \texttt{extension/}: CUDA/C++ çekirdekleri (adjacency ve propagation).
+\end{itemize}
+
+\section{Ana Dosya Grupları ve Sorumluluk Matrisi}
+\begin{longtable}{|p{0.30\textwidth}|p{0.64\textwidth}|}
+\hline
+\textbf{Dosya(lar)} & \textbf{Görev / Teknik Not} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Dosya(lar)} & \textbf{Görev / Teknik Not} \\
+\hline
+\endhead
+
+\texttt{README.md} & Projenin ana açıklaması; University-1652 görev tanımı, eğitim/test örnek komutları, haberler ve referanslar. \\
+\hline
+\texttt{README\_RGBD.md} & MiDaS depth + RGBD mimarisinin entegrasyonu, 4-kanal giriş mantığı, beklenen kazanımlar. \\
+\hline
+\texttt{README\_GRADCAM.md} & Grad-CAM/Grad-CAM++ kullanım kılavuzu, karşılaştırmalı analiz ve metrik yorumlama. \\
+\hline
+\texttt{TRAINING\_GUIDE.md} & RGB vs RGBD eğitim akışları, önerilen hiperparametreler, beklenen metrik farkları. \\
+\hline
+\texttt{technical\_documentation.tex} & Teorik arka plan (GeM, Circle Loss, RGBD adaptasyonu), pipeline ve matematiksel formülasyonlar. \\
+\hline
+\texttt{model.py} & Backbone + pooling + classifier modülleri; iki/üç görünüm ağ tanımları. \\
+\hline
+\texttt{model\_rgbd.py} & İlk konvolüsyon katmanını 4 kanala dönüştüren ve RGBD dalını tanımlayan model dosyası. \\
+\hline
+\texttt{dataset\_rgbd.py} & \texttt{CVUSADataset}, \texttt{CVUSARGBDDataset}, \texttt{RGBDSatelliteDataset}, \texttt{MixedRGBDDataset}. \\
+\hline
+\texttt{train.py} & Çok-görüşlü ana eğitim scripti; scheduler, optimizer, mixed precision ve eğri çizimi. \\
+\hline
+\texttt{train\_cvusa.py} & CVUSA odaklı eğitim scripti (RGB ve opsiyonel RGBD yolları). \\
+\hline
+\texttt{test.py} & Genel feature çıkarımı ve retrieval değerlendirmesi. \\
+\hline
+\texttt{test\_cvusa.py} & CVUSA test akışı; \texttt{RGBDTransform} ile derinlik kanalının entegrasyonu. \\
+\hline
+\texttt{gradcam\_visualization.py} & \texttt{GradCAM}, \texttt{GradCAMPlusPlus} sınıfları ve tekli/batch CAM üretimi. \\
+\hline
+\texttt{compare\_gradcam.py} & RGB vs RGBD dikkat haritası fark analizi (entropy, peak, gini vb.). \\
+\hline
+\texttt{compare\_models.py} & Parametre sayımı, katman bazlı karşılaştırma ve raporlama. \\
+\hline
+\texttt{evaluate\_gpu.py} & mAP ve retrieval metriği hesaplama. \\
+\hline
+\texttt{autoaugment.py}, \texttt{random\_erasing.py} & Veri artırma stratejileri. \\
+\hline
+\texttt{utils.py} & Model kaydet/yükle, sınıf dengeleme ağırlıkları, EMA benzeri yardımcılar. \\
+\hline
+\texttt{folder.py} & Veri seti dizin okuma altyapısı (ImageFolder türevi). \\
+\hline
+\texttt{GPU-Re-Ranking/*} & GNN tabanlı post-processing ile gerçek-zamanlıya yakın yeniden sıralama. \\
+\hline
+\texttt{docs/*}, \texttt{tutorial/*}, \texttt{State-of-the-art/*} & Proje web dokümanı, öğretici materyal, literatür/benchmark notları. \\
+\hline
+\end{longtable}
+
+\section{Eğitim/Test İş Akışı Haritası}
+\subsection*{Standart University-1652 Akışı}
+\begin{enumerate}
+    \item Veri hazırlığı ve klasör doğrulama.
+    \item Model seçimi: RGB (\texttt{model.py}) veya RGBD (\texttt{model\_rgbd.py}).
+    \item Eğitim: \texttt{train.py} (veya dataset özel \texttt{train\_cvusa.py}).
+    \item Test: \texttt{test.py} / \texttt{test\_cvusa.py}.
+    \item Sonuç görselleştirme: \texttt{demo.py}, Grad-CAM dosyaları.
+    \item Opsiyonel post-processing: \texttt{GPU-Re-Ranking}.
+\end{enumerate}
+
+\subsection*{RGBD Akışı (CVUSA odaklı)}
+\begin{enumerate}
+    \item MiDaS ile depth üretimi (harici adım/Colab pipeline).
+    \item \texttt{dataset\_rgbd.py} ile RGB+Depth yükleme.
+    \item \texttt{train\_cvusa.py --use\_rgbd} ile eğitim.
+    \item \texttt{test\_cvusa.py --use\_rgbd} ile ölçüm.
+    \item \texttt{compare\_models.py} + \texttt{compare\_gradcam.py} ile analiz.
+\end{enumerate}
+
+\section{Alt Klasör Bazlı Ayrıntılar}
+\subsection*{docs/}
+\begin{itemize}
+    \item Statik tanıtım sayfası: \texttt{index.html}
+    \item Görsel ve referans varlıkları: \texttt{index\_files/}
+\end{itemize}
+
+\subsection*{GPU-Re-Ranking/}
+\begin{itemize}
+    \item Python API + CLI değerlendirme scriptleri
+    \item CUDA extension kaynakları (\texttt{.cpp}/\texttt{.cu})
+    \item \texttt{make.sh} ile derleme
+\end{itemize}
+
+\subsection*{SIFT/}
+\begin{itemize}
+    \item MATLAB demo scripti ve örnek görseller
+\end{itemize}
+
+\subsection*{image\_4K/}
+\begin{itemize}
+    \item 4K demo/test örnek query görüntüleri (00--11 klasörleri ve ek PNG'ler)
+\end{itemize}
+
+\subsection*{model/}
+\begin{itemize}
+    \item Eğitilmiş ağırlıklar için saklama noktası (şu an \texttt{.gitkeep})
+\end{itemize}
+
+\section{Ek A: .git Hariç Tam Dosya Listesi (102 Dosya)}
+\small
+\begin{verbatim}
+.gitignore
+COLAB_SATELLITE_DRONE.ipynb
+GPU-Re-Ranking/README.md
+GPU-Re-Ranking/evaluate_rerank_gpu.py
+GPU-Re-Ranking/extension/adjacency_matrix/build_adjacency_matrix.cpp
+GPU-Re-Ranking/extension/adjacency_matrix/build_adjacency_matrix_kernel.cu
+GPU-Re-Ranking/extension/adjacency_matrix/setup.py
+GPU-Re-Ranking/extension/make.sh
+GPU-Re-Ranking/extension/propagation/gnn_propagate.cpp
+GPU-Re-Ranking/extension/propagation/gnn_propagate_kernel.cu
+GPU-Re-Ranking/extension/propagation/setup.py
+GPU-Re-Ranking/gnn_reranking.py
+GPU-Re-Ranking/utils.py
+LICENSE
+PROJECT_FILE_SUMMARY.tex
+README.md
+README_GRADCAM.md
+README_RGBD.md
+Request.md
+SIFT/1.png
+SIFT/2.png
+SIFT/3.png
+SIFT/README.md
+SIFT/SIFT_Demo.png
+SIFT/demo_sift.m
+State-of-the-art/README.md
+TRAINING_GUIDE.md
+University1652_Colab.ipynb
+autoaugment.py
+circle_loss.py
+colab_full_pipeline.py
+compare_gradcam.py
+compare_models.py
+dataset_rgbd.py
+demo.py
+demo_4K.py
+docs/index.html
+docs/index_files/.DS_Store
+docs/index_files/Motivation.png
+docs/index_files/bibtex_cvpr2019.txt
+docs/index_files/sample_drone.jpg
+docs/index_files/sample_google.jpg
+docs/index_files/sample_satellite.jpg
+docs/index_files/sample_street.jpg
+docs/index_files/top3.png
+docs/index_files/youtube1.png
+evaluate_gpu.py
+find_rgb_improvements.py
+folder.py
+gallery_name.txt
+gradcam_visualization.py
+image_4K/00/query.png
+image_4K/01/query.png
+image_4K/02/query.png
+image_4K/03/query.png
+image_4K/04/query.png
+image_4K/05/query.png
+image_4K/06/query.png
+image_4K/07/query.png
+image_4K/08/query.png
+image_4K/09/query.png
+image_4K/1.png
+image_4K/10/query.png
+image_4K/11/query.png
+image_4K/3.png
+image_4K/6.png
+image_4K/7.png
+image_4K/8.png
+image_4K/9.png
+model.py
+model/.gitkeep
+model_rgbd.py
+new_name_list.txt
+prepare_cvusa.py
+prepare_limit_view.py
+query_name.txt
+random_erasing.py
+requirement.txt
+show.png
+show_data.py
+technical_documentation.tex
+test.py
+test_160k.py
+test_4K.py
+test_ImageNet.py
+test_Place365.py
+test_cvusa.py
+test_train.py
+tool/clear_model.py
+train.py
+train_18_sample.py
+train_1_sample.py
+train_27_sample.py
+train_3_sample.py
+train_9_sample.py
+train_baseline_rgb.sh
+train_cvusa.py
+train_no_street.py
+train_rgbd.sh
+tutorial/README.md
+tutorial/RKNet.png
+utils.py
+\end{verbatim}
+\normalsize
+
+\section*{Son Not}
+Bu özet, proje kökündeki yürütülebilir scriptleri, dokümantasyonları, görselleştirme araçlarını, CUDA uzantılarını ve veri/çıktı varlıklarını tek belgede birleştirir. Proje içinde fonksiyonel ayrışma nettir: \emph{modelleme} $\rightarrow$ \emph{eğitim} $\rightarrow$ \emph{test} $\rightarrow$ \emph{analiz} $\rightarrow$ \emph{re-ranking}.
+
+\end{document}
