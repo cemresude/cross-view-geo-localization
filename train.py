@@ -3,7 +3,7 @@
 from __future__ import print_function, division
 
 import argparse
-
+import wandb
 import numpy as np
 import torch
 import torch.nn as nn
@@ -81,6 +81,15 @@ parser.add_argument('--lifted', action='store_true', help='use lifted loss')
 parser.add_argument('--sphere', action='store_true', help='use sphere loss')
 parser.add_argument('--loss_merge', action='store_true', help='combine perspectives to calculate losses')
 opt = parser.parse_args()
+
+
+# --- W&B EKLENTİSİ BAŞLANGIÇ ---
+wandb.init(
+    project="cross-view-lpn", # W&B'de görünecek proje adı
+    name=opt.name,            # Bash komutundaki --name (lpn_square_test) buraya gelir
+    config=vars(opt)          # Tüm hiperparametreleri W&B'ye gönderir
+)
+# --- W&B EKLENTİSİ BİTİŞ ---
 
 if opt.resume:
     model, opt, start_epoch = load_network(opt.name, opt)
@@ -492,6 +501,18 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
                                                                                                            epoch_acc2,
                                                                                                            epoch_acc3))
 
+            if 'wandb' in globals() and getattr(wandb, 'run', None) is not None:
+                log_payload = {
+                    'epoch': epoch,
+                    'train_loss': epoch_loss,
+                    'learning_rate': optimizer.param_groups[0]['lr'],
+                    'satellite_acc': epoch_acc,
+                    'drone_acc': epoch_acc2
+                }
+                if opt.views == 3:
+                    log_payload['street_acc'] = epoch_acc3
+                wandb.log(log_payload)
+
             y_loss[phase].append(epoch_loss)
             y_err[phase].append(1.0 - epoch_acc)
             # deep copy the model
@@ -512,6 +533,9 @@ def train_model(model, model_test, criterion, optimizer, scheduler, scaler, num_
         time_elapsed // 60, time_elapsed % 60))
     # print('Best val Acc: {:4f}'.format(best_acc))
     # save_network(model_test, opt.name+'adapt', epoch)
+
+    if 'wandb' in globals() and getattr(wandb, 'run', None) is not None:
+        wandb.finish()
 
     return model
 
