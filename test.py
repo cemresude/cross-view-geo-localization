@@ -294,11 +294,27 @@ which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
 print('%d -> %d:'%(which_query, which_gallery))
 
-gallery_path = image_datasets[gallery_name].imgs
+gallery_dataset = image_datasets[gallery_name]
+if hasattr(gallery_dataset, 'imgs'):
+    gallery_path = gallery_dataset.imgs
+elif hasattr(gallery_dataset, 'samples'):
+    if len(gallery_dataset.samples) == 0:
+        raise RuntimeError(f"No RGBD samples found for gallery '{gallery_name}'. Check depth maps under depth_root: {depth_root}")
+    gallery_path = [(rgb_path, label) for rgb_path, _, label in gallery_dataset.samples]
+else:
+    raise AttributeError(f"Dataset for '{gallery_name}' has no imgs/samples attribute")
 f = open('gallery_name.txt','w')
 for p in gallery_path:
     f.write(p[0]+'\n')
-query_path = image_datasets[query_name].imgs
+query_dataset = image_datasets[query_name]
+if hasattr(query_dataset, 'imgs'):
+    query_path = query_dataset.imgs
+elif hasattr(query_dataset, 'samples'):
+    if len(query_dataset.samples) == 0:
+        raise RuntimeError(f"No RGBD samples found for query '{query_name}'. Check depth maps under depth_root: {depth_root}")
+    query_path = [(rgb_path, label) for rgb_path, _, label in query_dataset.samples]
+else:
+    raise AttributeError(f"Dataset for '{query_name}' has no imgs/samples attribute")
 f = open('query_name.txt','w')
 for p in query_path:
     f.write(p[0]+'\n')
