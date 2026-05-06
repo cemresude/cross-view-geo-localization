@@ -18,6 +18,7 @@ import scipy.io
 import yaml
 import math
 from model import ft_net, two_view_net, three_view_net
+from dataset_rgbd import RGBDSatelliteDataset
 from utils import load_network
 
 ######################################################################
@@ -114,6 +115,15 @@ if opt.PCB:
 
 data_dir = test_dir
 
+def resolve_depth_root(test_dir_path):
+    parent = os.path.dirname(test_dir_path)
+    base_name = os.path.basename(parent)
+    candidate_base = os.path.join(os.path.dirname(parent), base_name + '_depth')
+    candidate = os.path.join(candidate_base, os.path.basename(test_dir_path))
+    return candidate if os.path.exists(candidate) else None
+
+depth_root = resolve_depth_root(data_dir)
+
 if opt.multi:
     image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
@@ -129,7 +139,14 @@ else:
             available_datasets.append(x)
     
     print(f"📂 Found datasets: {available_datasets}")
-    image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x), data_transforms) for x in available_datasets}
+    image_datasets = {}
+    for x in available_datasets:
+        if opt.use_rgbd and 'satellite' in x:
+            rgb_folder = os.path.join(data_dir, x)
+            depth_folder = os.path.join(data_dir, x.replace('satellite', 'satellite_depth'))
+            image_datasets[x] = RGBDSatelliteDataset(rgb_folder, depth_folder, transform=data_transforms, depth_root=depth_root)
+        else:
+            image_datasets[x] = datasets.ImageFolder(os.path.join(data_dir, x), data_transforms)
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
                                              shuffle=False, num_workers=16) for x in available_datasets}
 use_gpu = torch.cuda.is_available()
