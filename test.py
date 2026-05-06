@@ -251,6 +251,28 @@ since = time.time()
 query_name = opt.query_folder
 gallery_name = opt.gallery_folder
 
+if gallery_name not in image_datasets:
+    if len(image_datasets) == 0:
+        raise KeyError(f"No datasets found under test_dir: {test_dir}")
+    # Prefer any available gallery_* folder
+    gallery_candidates = [k for k in image_datasets.keys() if k.startswith('gallery_')]
+    if len(gallery_candidates) > 0:
+        gallery_name = gallery_candidates[0]
+    else:
+        gallery_name = list(image_datasets.keys())[0]
+    print(f"⚠️ gallery_folder not found. Using: {gallery_name}")
+
+if query_name not in image_datasets:
+    if len(image_datasets) == 0:
+        raise KeyError(f"No datasets found under test_dir: {test_dir}")
+    # Prefer any available query_* folder
+    query_candidates = [k for k in image_datasets.keys() if k.startswith('query_')]
+    if len(query_candidates) > 0:
+        query_name = query_candidates[0]
+    else:
+        query_name = list(image_datasets.keys())[0]
+    print(f"⚠️ query_folder not found. Using: {query_name}")
+
 which_gallery = which_view(gallery_name)
 which_query = which_view(query_name)
 print('%d -> %d:'%(which_query, which_gallery))
