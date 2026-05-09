@@ -643,24 +643,33 @@ if __name__ == "__main__":
     result = {'gallery_f':gallery_feature.numpy(),'gallery_label':gallery_label,'gallery_path':gallery_path,'query_f':query_feature.numpy(),'query_label':query_label, 'query_path':query_path}
     scipy.io.savemat('pytorch_result.mat', result)
 
-    print(opt.name)
+    print(opt.name, flush=True)
     result_txt = './model/%s/result.txt' % opt.name
-    os.system('python evaluate_gpu.py | tee -a %s' % result_txt)
+    # NOTE: evaluate_gpu.py removed — metrics computed inline below to avoid double GPU usage
 
-    # ── Inline metric computation (always runs) ───────────────────────
-    print('\n📊 Computing retrieval metrics...')
-    q_feat    = query_feature.cuda()   if use_gpu else query_feature
-    g_feat    = gallery_feature.cuda() if use_gpu else gallery_feature
+    # Free GPU memory before evaluation
+    try:
+        model.cpu()
+        if use_gpu:
+            torch.cuda.empty_cache()
+        print('GPU memory freed.', flush=True)
+    except Exception:
+        pass
+
+    # ── Inline metric computation (CPU-only, no OOM risk) ─────────────────
+    import sys
+    print('\n📊 Computing retrieval metrics on CPU...', flush=True)
+    # Keep features on CPU to avoid second GPU allocation
+    q_feat    = query_feature        # already on CPU (returned by extract_feature)
+    g_feat    = gallery_feature      # already on CPU
     q_lbl     = np.array(query_label)
     g_lbl     = np.array(gallery_label)
     n_gallery = len(g_lbl)
+    print(f'  Query: {len(q_lbl)}  Gallery: {n_gallery}  Feat-dim: {q_feat.shape[1]}', flush=True)
 
     def _eval_query(qf, ql, gf, gl):
-        """Returns (ap, first_hit_rank_1indexed, cmc_array).
-        cmc_array length = len(gallery) - len(junk).
-        Returns (0, -1, None) if no good match exists.
-        """
-        score     = torch.mm(gf, qf.view(-1, 1)).squeeze(1).cpu().numpy()
+        """Pure-numpy metric computation (CPU). Returns (ap, first_hit_rank_1indexed, cmc_array)."""
+        score     = (gf @ qf.unsqueeze(1)).squeeze(1).numpy()  # CPU torch.mm
         index     = np.argsort(score)[::-1]
         good_idx  = np.argwhere(gl == ql).flatten()
         junk_idx  = np.argwhere(gl == -1).flatten()
@@ -692,13 +701,13 @@ if __name__ == "__main__":
     valid_q   = 0
 
     for i in range(len(q_lbl)):
-        try:
-            ap_tmp, rank_tmp, cmc_tmp = _eval_query(q_feat[i], q_lbl[i], g_feat, g_lbl)
-        except Exception as e:
-            print(f'⚠️  Query {i} eval error: {e}')
-            continue
-        if cmc_tmp is None:
-            continue
+        ap_tmp, rank_tmp, cmc_tmp = _eval_query(q_feat[i], q_lbl[i], g_feat, g_lbl)
+        if cmc_tmp is None: continue
+
+        if (i + 1) % 100 == 0 or i == 0:
+            print(f'  Query {i+1}/{len(q_lbl)} evaluated...', flush=True)
+            sys.stdout.flush()
+
         valid_q += 1
         ap_list.append(ap_tmp * 100)
         rank_list.append(rank_tmp)
@@ -708,6 +717,9 @@ if __name__ == "__main__":
         else:
             CMC_accum[:n_c] += cmc_tmp
             CMC_accum[n_c:] += cmc_tmp[-1]
+
+    print(f'\n  Done. Valid: {valid_q}/{len(q_lbl)}', flush=True)
+    sys.stdout.flush()
 
     if valid_q == 0:
         print('⚠️  No valid queries found — check that query and gallery labels overlap.')
@@ -724,18 +736,19 @@ if __name__ == "__main__":
         rtop1     = float(CMC_norm[top1_idx]) * 100 if n_gallery > top1_idx else 0.0
 
         # ── Always print to terminal ──────────────────────────────────
-        print('\n' + '='*60)
-        print('  TEST RESULTS')
-        print('='*60)
-        print(f'  Recall@1    : {r1:.2f}%')
-        print(f'  Recall@5    : {r5:.2f}%')
-        print(f'  Recall@10   : {r10:.2f}%')
-        print(f'  Recall@20   : {r20:.2f}%')
-        print(f'  Recall@top1%: {rtop1:.2f}%')
-        print(f'  mAP         : {mAP:.2f}%')
-        print(f'  Valid queries: {valid_q} / {len(q_lbl)}')
-        print(f'  Gallery size : {n_gallery}')
-        print('='*60)
+        print('\n' + '='*60, flush=True)
+        print('  TEST RESULTS', flush=True)
+        print('='*60, flush=True)
+        print(f'  Recall@1    : {r1:.2f}%', flush=True)
+        print(f'  Recall@5    : {r5:.2f}%', flush=True)
+        print(f'  Recall@10   : {r10:.2f}%', flush=True)
+        print(f'  Recall@20   : {r20:.2f}%', flush=True)
+        print(f'  Recall@top1%: {rtop1:.2f}%', flush=True)
+        print(f'  mAP         : {mAP:.2f}%', flush=True)
+        print(f'  Valid queries: {valid_q} / {len(q_lbl)}', flush=True)
+        print(f'  Gallery size : {n_gallery}', flush=True)
+        print('='*60, flush=True)
+        sys.stdout.flush()
 
         # Save result txt
         with open(result_txt, 'a') as f_res:
