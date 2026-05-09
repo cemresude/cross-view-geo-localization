@@ -208,12 +208,17 @@ else:
             
             print(f"   📂 RGB folder: {query_folder}")
             print(f"   📂 Depth folder: {depth_folder}")
+
+            if not os.path.exists(depth_folder):
+                raise FileNotFoundError(f"Depth folder not found: {depth_folder}")
             
             query_dataset = RGBDSatelliteDataset(
                 rgb_folder=query_folder,
                 depth_folder=depth_folder,
                 transform=rgbd_transform
             )
+            if len(query_dataset) == 0:
+                raise RuntimeError(f"No RGBD samples found for query '{opt.query_folder}'. Check depth folder: {depth_folder}")
         else:
             print(f"🔵 Using RGB dataset (University1652) for query: {opt.query_folder}")
             query_dataset = datasets.ImageFolder(query_folder, data_transforms)
@@ -239,11 +244,16 @@ else:
 
             print(f"   📂 RGB folder: {gallery_folder}")
             print(f"   📂 Depth folder: {gallery_depth_folder}")
+
+            if not os.path.exists(gallery_depth_folder):
+                raise FileNotFoundError(f"Depth folder not found: {gallery_depth_folder}")
             gallery_dataset = RGBDSatelliteDataset(
                 rgb_folder=gallery_folder,
                 depth_folder=gallery_depth_folder,
                 transform=rgbd_transform
             )
+            if len(gallery_dataset) == 0:
+                raise RuntimeError(f"No RGBD samples found for gallery '{opt.gallery_folder}'. Check depth folder: {gallery_depth_folder}")
         else:
             gallery_dataset = datasets.ImageFolder(gallery_folder, data_transforms)
     else:
