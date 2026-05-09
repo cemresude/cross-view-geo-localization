@@ -188,8 +188,20 @@ else:
             print(f"🌈 Using RGBD dataset (University1652) for query: {opt.query_folder}")
             # Determine depth folder location
             if opt.depth_dir:
-                # Use specified depth directory
-                depth_folder = os.path.join(opt.depth_dir, opt.query_folder + '_depth')
+                # Use specified depth directory - try with and without _depth suffix
+                possible_depth_paths = [
+                    os.path.join(opt.depth_dir, opt.query_folder + '_depth'),  # e.g. query_satellite_depth
+                    os.path.join(opt.depth_dir, opt.query_folder),             # e.g. query_satellite
+                ]
+                depth_folder = None
+                for path in possible_depth_paths:
+                    if os.path.exists(path):
+                        depth_folder = path
+                        print(f"   ✅ Found query depth at: {path}")
+                        break
+                if depth_folder is None:
+                    print(f"⚠️ Query depth not found. Tried: {possible_depth_paths}")
+                    depth_folder = possible_depth_paths[0]  # Use first as default
             else:
                 # Try multiple possible locations
                 possible_depth_paths = [
@@ -226,7 +238,20 @@ else:
         print(f"🚁 Loading gallery (University1652): {opt.gallery_folder}")
         if opt.use_rgbd and 'satellite' in opt.gallery_folder:
             if opt.depth_dir:
-                gallery_depth_folder = os.path.join(opt.depth_dir, opt.gallery_folder + '_depth')
+                # Use specified depth directory - try with and without _depth suffix
+                possible_gallery_depth_paths = [
+                    os.path.join(opt.depth_dir, opt.gallery_folder + '_depth'),  # e.g. gallery_satellite_depth
+                    os.path.join(opt.depth_dir, opt.gallery_folder),             # e.g. gallery_satellite
+                ]
+                gallery_depth_folder = None
+                for path in possible_gallery_depth_paths:
+                    if os.path.exists(path):
+                        gallery_depth_folder = path
+                        print(f"   ✅ Found gallery depth at: {path}")
+                        break
+                if gallery_depth_folder is None:
+                    print(f"⚠️ Gallery depth not found. Tried: {possible_gallery_depth_paths}")
+                    gallery_depth_folder = possible_gallery_depth_paths[0]
             else:
                 possible_depth_paths = [
                     os.path.join(data_dir, opt.gallery_folder + '_depth'),
