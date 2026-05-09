@@ -240,9 +240,14 @@ class RGBDSatelliteDataset(Dataset):
             possible_folders.append(os.path.join(self.depth_root, depth_type, class_name))
             possible_folders.append(os.path.join(self.depth_root, self.folder_type, class_name))
             possible_folders.append(os.path.join(self.depth_root, class_name))
+            # Flat (no class subfolders) depth layouts
+            possible_folders.append(os.path.join(self.depth_root, depth_type))
+            possible_folders.append(os.path.join(self.depth_root, self.folder_type))
         
         # 2. Sonra depth_folder'ı dene
         possible_folders.append(os.path.join(self.depth_folder, class_name))
+        # depth_folder düz (classsız) olabilir
+        possible_folders.append(self.depth_folder)
         
         # 3. Tüm kombinasyonları dene
         for folder in possible_folders:

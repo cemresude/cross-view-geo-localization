@@ -219,7 +219,33 @@ else:
             query_dataset = datasets.ImageFolder(query_folder, data_transforms)
         
         print(f"🚁 Loading gallery (University1652): {opt.gallery_folder}")
-        gallery_dataset = datasets.ImageFolder(gallery_folder, data_transforms)
+        if opt.use_rgbd and 'satellite' in opt.gallery_folder:
+            if opt.depth_dir:
+                gallery_depth_folder = os.path.join(opt.depth_dir, opt.gallery_folder + '_depth')
+            else:
+                possible_depth_paths = [
+                    os.path.join(data_dir, opt.gallery_folder + '_depth'),
+                    os.path.join(os.path.dirname(data_dir) + '_depth', os.path.basename(data_dir), opt.gallery_folder + '_depth'),
+                    os.path.join(data_dir + '_depth', opt.gallery_folder + '_depth'),
+                ]
+                gallery_depth_folder = None
+                for path in possible_depth_paths:
+                    if os.path.exists(path):
+                        gallery_depth_folder = path
+                        break
+                if gallery_depth_folder is None:
+                    print(f"⚠️ Tried paths: {possible_depth_paths}")
+                    gallery_depth_folder = possible_depth_paths[0]
+
+            print(f"   📂 RGB folder: {gallery_folder}")
+            print(f"   📂 Depth folder: {gallery_depth_folder}")
+            gallery_dataset = RGBDSatelliteDataset(
+                rgb_folder=gallery_folder,
+                depth_folder=gallery_depth_folder,
+                transform=rgbd_transform
+            )
+        else:
+            gallery_dataset = datasets.ImageFolder(gallery_folder, data_transforms)
     else:
         # CVUSA format - use CVUSADataset
         if opt.use_rgbd:
