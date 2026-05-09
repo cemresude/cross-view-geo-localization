@@ -22,6 +22,15 @@ from model_rgbd import two_view_net_rgbd
 from dataset_rgbd import CVUSADataset, CVUSARGBDDataset, RGBDSatelliteDataset
 from utils import load_network
 
+# Weights & Biases
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print('⚠️  wandb not installed. Run: pip install wandb')
+
+
 #fp16
 try:
     from apex.fp16_utils import *
@@ -50,6 +59,9 @@ parser.add_argument('--ms',default='1', type=str,help='multiple_scale: e.g. 1 1,
 parser.add_argument('--query_folder', default='query_satellite', type=str, help='query folder name (query_satellite for University1652, satellite for CVUSA)')
 parser.add_argument('--gallery_folder', default='gallery_drone', type=str, help='gallery folder name (gallery_drone for University1652, streetview for CVUSA)')
 parser.add_argument('--depth_dir', default='', type=str, help='depth directory root (e.g., ./data/cvpr2017_cvusa_depth/val). If empty, uses test_dir with _depth suffix on folder names')
+parser.add_argument('--use_wandb', action='store_true', help='log metrics to Weights & Biases')
+parser.add_argument('--wandb_project', default='cross-view-geo-localization', type=str, help='wandb project name')
+parser.add_argument('--wandb_run_name', default='', type=str, help='wandb run name (defaults to model name)')
 
 opt = parser.parse_args()
 ###load config###
@@ -93,6 +105,38 @@ ms = []
 for s in str_ms:
     s_f = float(s)
     ms.append(math.sqrt(s_f))
+
+# ── Weights & Biases initialisation ──────────────────────────────────
+use_wandb = opt.use_wandb and WANDB_AVAILABLE
+if use_wandb:
+    run_name = opt.wandb_run_name if opt.wandb_run_name else opt.name
+    wandb.init(
+        project=opt.wandb_project,
+        name=run_name,
+        config={
+            'model_name':    opt.name,
+            'test_dir':      opt.test_dir,
+            'depth_dir':     opt.depth_dir,
+            'query_folder':  opt.query_folder,
+            'gallery_folder':opt.gallery_folder,
+            'use_rgbd':      opt.use_rgbd,
+            'which_epoch':   opt.which_epoch,
+            'batchsize':     opt.batchsize,
+            'img_h':         opt.h,
+            'img_w':         opt.w,
+            'views':         opt.views,
+            'ms':            opt.ms,
+            'PCB':           opt.PCB,
+            'pool':          opt.pool,
+            'use_dense':     opt.use_dense,
+            'nclasses':      opt.nclasses,
+        },
+        tags=['test', 'rgbd' if opt.use_rgbd else 'rgb'],
+        job_type='eval',
+    )
+    print(f'🟡 wandb run started: {wandb.run.url}')
+elif opt.use_wandb and not WANDB_AVAILABLE:
+    print('⚠️  --use_wandb flag set but wandb is not installed. Skipping.')
 
 # set gpu ids
 if len(gpu_ids)>0 and torch.cuda.is_available():
@@ -396,15 +440,16 @@ since = time.time()
 #
 # Extract feature from  a trained model.
 #
-def extract_feature(model, dataloaders, view_index=1):
+def extract_feature(model, dataloaders, view_index=1, view_name=''):
     features = torch.FloatTensor()
     count = 0
-    
-    for data in dataloaders:
+    total = len(dataloaders.dataset)
+
+    for batch_idx, data in enumerate(dataloaders):
         img, label = data
         n, c, h, w = img.size()
         count += n
-        print(f"Processing batch: {count}, channels: {c}, shape: {img.shape}")
+        print(f"Processing batch: {count}/{total}, channels: {c}, shape: {img.shape}")
         
         # Verify channel count matches expected format
         if view_index == 1 and opt.use_rgbd:
@@ -473,6 +518,14 @@ def extract_feature(model, dataloaders, view_index=1):
             ff = ff.div(fnorm.expand_as(ff))
 
         features = torch.cat((features, ff.data.cpu()), 0)
+
+        # ── wandb batch-level progress ──
+        if use_wandb:
+            wandb.log({
+                f'extract/{view_name}_samples_processed': count,
+                f'extract/{view_name}_progress_pct': round(count / total * 100, 1),
+            })
+
     return features
 
 def get_id(img_path):
@@ -558,8 +611,8 @@ query_label, query_path  = get_id(query_path)
 
 if __name__ == "__main__":
     with torch.no_grad():
-        query_feature = extract_feature(model,dataloaders[query_name], which_query)
-        gallery_feature = extract_feature(model,dataloaders[gallery_name], which_gallery)
+        query_feature  = extract_feature(model, dataloaders[query_name],  which_query,  view_name='query')
+        gallery_feature = extract_feature(model, dataloaders[gallery_name], which_gallery, view_name='gallery')
 
     # For street-view image, we use the avg feature as the final feature.
     '''
@@ -591,5 +644,81 @@ if __name__ == "__main__":
     scipy.io.savemat('pytorch_result.mat',result)
 
     print(opt.name)
-    result = './model/%s/result.txt'%opt.name
-    os.system('python evaluate_gpu.py | tee -a %s'%result)
+    result_txt = './model/%s/result.txt' % opt.name
+    os.system('python evaluate_gpu.py | tee -a %s' % result_txt)
+
+    # ── wandb: parse result.txt and log final metrics ─────────────────
+    if use_wandb:
+        # ── 1. Compute metrics inline (same logic as evaluate_gpu.py) ──
+        q_feat = query_feature.cuda()  if use_gpu else query_feature
+        g_feat = gallery_feature.cuda() if use_gpu else gallery_feature
+        q_lbl  = np.array(query_label)
+        g_lbl  = np.array(gallery_label)
+
+        CMC = torch.IntTensor(len(g_lbl)).zero_()
+        ap_total = 0.0
+
+        def _evaluate(qf, ql, gf, gl):
+            score = torch.mm(gf, qf.view(-1,1)).squeeze(1).cpu().numpy()
+            index = np.argsort(score)[::-1]
+            good_index = np.argwhere(gl == ql)
+            junk_index = np.argwhere(gl == -1)
+            # remove junk
+            mask  = np.in1d(index, junk_index, invert=True)
+            index = index[mask]
+            ngood = len(good_index)
+            if ngood == 0:
+                return 0.0, torch.IntTensor(len(gl)).zero_()
+            mask2     = np.in1d(index, good_index)
+            rows_good = np.argwhere(mask2).flatten()
+            cmc = torch.IntTensor(len(index)).zero_()
+            cmc[rows_good[0]:] = 1
+            ap = 0.0
+            for i in range(ngood):
+                d_recall  = 1.0 / ngood
+                precision = (i+1) / (rows_good[i]+1)
+                old_prec  = i / rows_good[i] if rows_good[i] != 0 else 1.0
+                ap += d_recall * (old_prec + precision) / 2
+            return ap, cmc
+
+        for i in range(len(q_lbl)):
+            ap_tmp, CMC_tmp = _evaluate(q_feat[i], q_lbl[i], g_feat, g_lbl)
+            if len(CMC_tmp) > 0 and CMC_tmp[0] == -1:
+                continue
+            if len(CMC_tmp) == len(CMC):
+                CMC = CMC + CMC_tmp
+            ap_total += ap_tmp
+
+        CMC  = CMC.float() / len(q_lbl)
+        mAP  = ap_total / len(q_lbl) * 100
+        r1   = float(CMC[0])  * 100
+        r5   = float(CMC[4])  * 100 if len(CMC) > 4  else 0.0
+        r10  = float(CMC[9])  * 100 if len(CMC) > 9  else 0.0
+        top1_idx = round(len(g_lbl) * 0.01)
+        rtop1 = float(CMC[top1_idx]) * 100 if len(CMC) > top1_idx else 0.0
+
+        # ── 2. Log scalar metrics ──
+        wandb.log({
+            'test/Recall@1':    r1,
+            'test/Recall@5':    r5,
+            'test/Recall@10':   r10,
+            'test/Recall@top1%': rtop1,
+            'test/mAP':         mAP,
+            'test/time_min':    time_elapsed / 60,
+            'test/query_size':  len(q_lbl),
+            'test/gallery_size':len(g_lbl),
+        })
+
+        # ── 3. CMC curve (Recall@K for K=1..20) ──
+        k_values = list(range(1, min(21, len(CMC)+1)))
+        cmc_data = [[k, float(CMC[k-1])*100] for k in k_values]
+        cmc_table = wandb.Table(columns=['K', 'Recall@K (%)'], data=cmc_data)
+        wandb.log({'test/CMC_curve': wandb.plot.line(
+            cmc_table, 'K', 'Recall@K (%)',
+            title='CMC Curve (Recall@K)')
+        })
+
+        print(f'\n📊 wandb metrics logged:')
+        print(f'   Recall@1={r1:.2f}%  Recall@5={r5:.2f}%  Recall@10={r10:.2f}%  mAP={mAP:.2f}%')
+        print(f'   🔗 {wandb.run.url}')
+        wandb.finish()
