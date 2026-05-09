@@ -647,150 +647,179 @@ if __name__ == "__main__":
     result_txt = './model/%s/result.txt' % opt.name
     os.system('python evaluate_gpu.py | tee -a %s' % result_txt)
 
-    # ── wandb: compute and log all metrics ────────────────────────────
-    if use_wandb:
-        print('\n🟡 Computing metrics for wandb...')
-        q_feat = query_feature.cuda() if use_gpu else query_feature
-        g_feat = gallery_feature.cuda() if use_gpu else gallery_feature
-        q_lbl  = np.array(query_label)
-        g_lbl  = np.array(gallery_label)
-        n_gallery = len(g_lbl)
+    # ── Inline metric computation (always runs) ───────────────────────
+    print('\n📊 Computing retrieval metrics...')
+    q_feat    = query_feature.cuda()   if use_gpu else query_feature
+    g_feat    = gallery_feature.cuda() if use_gpu else gallery_feature
+    q_lbl     = np.array(query_label)
+    g_lbl     = np.array(gallery_label)
+    n_gallery = len(g_lbl)
 
-        # ─── per-query evaluation ───────────────────────────────────────
-        def _eval_query(qf, ql, gf, gl):
-            """Returns (ap, first_hit_rank_1indexed, cmc_n_clean).
-            cmc_n_clean has length = n_gallery - n_junk (always ≤ n_gallery).
-            """
-            score = torch.mm(gf, qf.view(-1, 1)).squeeze(1).cpu().numpy()
-            index = np.argsort(score)[::-1]
-            good_index = np.argwhere(gl == ql).flatten()
-            junk_index = np.argwhere(gl == -1).flatten()
-            # remove junk
-            mask  = np.in1d(index, junk_index, invert=True)
-            index = index[mask]
-            ngood = len(good_index)
-            if ngood == 0:
-                return 0.0, -1, None
-            mask2     = np.in1d(index, good_index)
-            rows_good = np.argwhere(mask2).flatten()
-            if len(rows_good) == 0:
-                return 0.0, -1, None
-            n_clean = len(index)
-            cmc = np.zeros(n_clean, dtype=np.float32)
-            cmc[rows_good[0]:] = 1.0
-            first_rank = int(rows_good[0]) + 1  # 1-indexed
-            ap = 0.0
-            for i in range(ngood):
-                d_recall = 1.0 / ngood
-                precision = (i + 1) / (rows_good[i] + 1)
-                old_prec  = i / rows_good[i] if rows_good[i] != 0 else 1.0
-                ap += d_recall * (old_prec + precision) / 2
-            return ap, first_rank, cmc
+    def _eval_query(qf, ql, gf, gl):
+        """Returns (ap, first_hit_rank_1indexed, cmc_array).
+        cmc_array length = len(gallery) - len(junk).
+        Returns (0, -1, None) if no good match exists.
+        """
+        score     = torch.mm(gf, qf.view(-1, 1)).squeeze(1).cpu().numpy()
+        index     = np.argsort(score)[::-1]
+        good_idx  = np.argwhere(gl == ql).flatten()
+        junk_idx  = np.argwhere(gl == -1).flatten()
+        # remove junk entries
+        mask      = np.in1d(index, junk_idx, invert=True)
+        index     = index[mask]
+        ngood     = len(good_idx)
+        if ngood == 0:
+            return 0.0, -1, None
+        mask2     = np.in1d(index, good_idx)
+        rows_good = np.argwhere(mask2).flatten()
+        if len(rows_good) == 0:
+            return 0.0, -1, None
+        n_clean   = len(index)
+        cmc       = np.zeros(n_clean, dtype=np.float32)
+        cmc[rows_good[0]:] = 1.0
+        first_rank = int(rows_good[0]) + 1  # 1-indexed
+        ap = 0.0
+        for i in range(ngood):
+            d_recall  = 1.0 / ngood
+            precision = (i + 1) / (rows_good[i] + 1)
+            old_prec  = i / rows_good[i] if rows_good[i] != 0 else 1.0
+            ap       += d_recall * (old_prec + precision) / 2
+        return ap, first_rank, cmc
 
-        CMC_accum   = np.zeros(n_gallery, dtype=np.float64)
-        ap_list     = []   # per-query AP
-        rank_list   = []   # per-query first-hit rank (1-indexed)
-        valid_q     = 0
+    CMC_accum = np.zeros(n_gallery, dtype=np.float64)
+    ap_list   = []
+    rank_list = []
+    valid_q   = 0
 
-        for i in range(len(q_lbl)):
+    for i in range(len(q_lbl)):
+        try:
             ap_tmp, rank_tmp, cmc_tmp = _eval_query(q_feat[i], q_lbl[i], g_feat, g_lbl)
-            if cmc_tmp is None:
-                continue
-            valid_q += 1
-            ap_list.append(ap_tmp * 100)
-            rank_list.append(rank_tmp)
-            # pad or trim cmc to n_gallery length
-            n_c = len(cmc_tmp)
-            if n_c >= n_gallery:
-                CMC_accum += cmc_tmp[:n_gallery]
-            else:
-                CMC_accum[:n_c] += cmc_tmp
-                CMC_accum[n_c:] += cmc_tmp[-1]  # propagate last value
-
-        if valid_q == 0:
-            print('⚠️ No valid queries — wandb metrics skipped.')
+        except Exception as e:
+            print(f'⚠️  Query {i} eval error: {e}')
+            continue
+        if cmc_tmp is None:
+            continue
+        valid_q += 1
+        ap_list.append(ap_tmp * 100)
+        rank_list.append(rank_tmp)
+        n_c = len(cmc_tmp)
+        if n_c >= n_gallery:
+            CMC_accum += cmc_tmp[:n_gallery]
         else:
-            CMC_norm = CMC_accum / valid_q          # shape (n_gallery,)
-            mAP      = float(np.mean(ap_list))
-            r1       = float(CMC_norm[0])  * 100
-            r5       = float(CMC_norm[4])  * 100 if n_gallery > 4  else 0.0
-            r10      = float(CMC_norm[9])  * 100 if n_gallery > 9  else 0.0
-            r20      = float(CMC_norm[19]) * 100 if n_gallery > 19 else 0.0
-            top1_idx = max(1, round(n_gallery * 0.01))
-            rtop1    = float(CMC_norm[top1_idx]) * 100 if n_gallery > top1_idx else 0.0
+            CMC_accum[:n_c] += cmc_tmp
+            CMC_accum[n_c:] += cmc_tmp[-1]
 
-            # ── 1. Scalar summary metrics ─────────────────────────────
-            wandb.log({
-                'test/Recall@1':     r1,
-                'test/Recall@5':     r5,
-                'test/Recall@10':    r10,
-                'test/Recall@20':    r20,
-                'test/Recall@top1%': rtop1,
-                'test/mAP':          mAP,
-                'test/time_min':     time_elapsed / 60,
-                'test/valid_queries':valid_q,
-                'test/gallery_size': n_gallery,
-            })
+    if valid_q == 0:
+        print('⚠️  No valid queries found — check that query and gallery labels overlap.')
+        print(f'   Query labels  sample: {q_lbl[:10]}')
+        print(f'   Gallery labels sample: {g_lbl[:10]}')
+    else:
+        CMC_norm  = CMC_accum / valid_q
+        mAP       = float(np.mean(ap_list))
+        r1        = float(CMC_norm[0])  * 100
+        r5        = float(CMC_norm[4])  * 100 if n_gallery > 4  else 0.0
+        r10       = float(CMC_norm[9])  * 100 if n_gallery > 9  else 0.0
+        r20       = float(CMC_norm[19]) * 100 if n_gallery > 19 else 0.0
+        top1_idx  = max(1, round(n_gallery * 0.01))
+        rtop1     = float(CMC_norm[top1_idx]) * 100 if n_gallery > top1_idx else 0.0
 
-            # ── 2. CMC Curve — Recall@K (K=1..50) ────────────────────
-            k_max   = min(50, n_gallery)
-            k_range = list(range(1, k_max + 1))
-            cmc_rows = [[k, float(CMC_norm[k-1]) * 100] for k in k_range]
-            cmc_tbl  = wandb.Table(columns=['K', 'Recall@K (%)'], data=cmc_rows)
-            wandb.log({'test/CMC_Recall_curve': wandb.plot.line(
-                cmc_tbl, 'K', 'Recall@K (%)', title='CMC Curve — Recall@K')})
+        # ── Always print to terminal ──────────────────────────────────
+        print('\n' + '='*60)
+        print('  TEST RESULTS')
+        print('='*60)
+        print(f'  Recall@1    : {r1:.2f}%')
+        print(f'  Recall@5    : {r5:.2f}%')
+        print(f'  Recall@10   : {r10:.2f}%')
+        print(f'  Recall@20   : {r20:.2f}%')
+        print(f'  Recall@top1%: {rtop1:.2f}%')
+        print(f'  mAP         : {mAP:.2f}%')
+        print(f'  Valid queries: {valid_q} / {len(q_lbl)}')
+        print(f'  Gallery size : {n_gallery}')
+        print('='*60)
 
-            # ── 3. Error Curve — Error@K = 1 − Recall@K ──────────────
-            err_rows = [[k, 100.0 - float(CMC_norm[k-1]) * 100] for k in k_range]
-            err_tbl  = wandb.Table(columns=['K', 'Error@K (%)'], data=err_rows)
-            wandb.log({'test/Error_curve': wandb.plot.line(
-                err_tbl, 'K', 'Error@K (%)', title='Error Curve — Error@K')})
+        # Save result txt
+        with open(result_txt, 'a') as f_res:
+            f_res.write(f'Recall@1:{r1:.2f} Recall@5:{r5:.2f} Recall@10:{r10:.2f} '
+                        f'Recall@top1%:{rtop1:.2f} mAP:{mAP:.2f}\n')
 
-            # ── 4. Recall@K bar chart (K = 1,5,10,20,top1%) ──────────
-            recall_bar_rows = [
-                ['Recall@1',     r1],
-                ['Recall@5',     r5],
-                ['Recall@10',    r10],
-                ['Recall@20',    r20],
-                ['Recall@top1%', rtop1],
-                ['mAP',          mAP],
-            ]
-            recall_bar_tbl = wandb.Table(columns=['Metric', 'Value (%)'],
-                                         data=recall_bar_rows)
-            wandb.log({'test/Recall_bar': wandb.plot.bar(
-                recall_bar_tbl, 'Metric', 'Value (%)',
-                title='Retrieval Metrics Summary')})
+        # ── wandb logging ─────────────────────────────────────────────
+        if use_wandb:
+            try:
+                k_max   = min(50, n_gallery)
+                k_range = list(range(1, k_max + 1))
+                rank_arr = np.array(rank_list, dtype=np.float32)
+                ap_arr   = np.array(ap_list,   dtype=np.float32)
 
-            # ── 5. Rank Distribution Histogram ────────────────────────
-            # (at what rank was the first correct match found?)
-            rank_arr = np.array(rank_list, dtype=np.float32)
-            wandb.log({'test/rank_distribution': wandb.Histogram(
-                rank_arr,
-                num_bins=min(64, int(rank_arr.max()) if len(rank_arr) > 0 else 64)
-            )})
+                # 1. Scalar metrics
+                wandb.log({
+                    'test/Recall@1':      r1,
+                    'test/Recall@5':      r5,
+                    'test/Recall@10':     r10,
+                    'test/Recall@20':     r20,
+                    'test/Recall@top1%':  rtop1,
+                    'test/mAP':           mAP,
+                    'test/time_min':      time_elapsed / 60,
+                    'test/valid_queries': valid_q,
+                    'test/gallery_size':  n_gallery,
+                })
 
-            # Log as table for custom exploration
-            rank_tbl = wandb.Table(columns=['Query Idx', 'First-Hit Rank'],
-                                   data=[[i, r] for i, r in enumerate(rank_list)])
-            wandb.log({'test/rank_table': rank_tbl})
+                # 2. CMC Curve — Recall@K
+                cmc_rows = [[k, float(CMC_norm[k-1]) * 100] for k in k_range]
+                cmc_tbl  = wandb.Table(columns=['K', 'Recall@K (%)'], data=cmc_rows)
+                wandb.log({'test/CMC_Recall_curve': wandb.plot.line(
+                    cmc_tbl, 'K', 'Recall@K (%)', title='CMC Curve — Recall@K')})
 
-            # ── 6. Per-Query AP Distribution ─────────────────────────
-            ap_arr = np.array(ap_list, dtype=np.float32)
-            wandb.log({'test/per_query_AP_hist': wandb.Histogram(ap_arr, num_bins=50)})
+                # 3. Error Curve — Error@K = 100 - Recall@K
+                err_rows = [[k, 100.0 - float(CMC_norm[k-1]) * 100] for k in k_range]
+                err_tbl  = wandb.Table(columns=['K', 'Error@K (%)'], data=err_rows)
+                wandb.log({'test/Error_curve': wandb.plot.line(
+                    err_tbl, 'K', 'Error@K (%)', title='Error Curve — Error@K')})
 
-            # ── 7. Precision@K Curve ──────────────────────────────────
-            # Precision@K = (# queries with hit ≤ K) / K * (avg over queries)
-            prec_rows = []
-            for k in k_range:
-                hits_at_k = np.sum(rank_arr <= k)  # queries correctly retrieved in top-K
-                precision_k = hits_at_k / (k * valid_q) * 100
-                prec_rows.append([k, precision_k])
-            prec_tbl = wandb.Table(columns=['K', 'Precision@K (%)'], data=prec_rows)
-            wandb.log({'test/Precision_curve': wandb.plot.line(
-                prec_tbl, 'K', 'Precision@K (%)', title='Precision@K Curve')})
+                # 4. Metrics bar chart
+                recall_bar_rows = [
+                    ['Recall@1',      r1],
+                    ['Recall@5',      r5],
+                    ['Recall@10',     r10],
+                    ['Recall@20',     r20],
+                    ['Recall@top1%',  rtop1],
+                    ['mAP',           mAP],
+                ]
+                recall_bar_tbl = wandb.Table(columns=['Metric', 'Value (%)'],
+                                             data=recall_bar_rows)
+                wandb.log({'test/Recall_bar': wandb.plot.bar(
+                    recall_bar_tbl, 'Metric', 'Value (%)',
+                    title='Retrieval Metrics Summary')})
 
-            print(f'\n📊 wandb metrics logged:')
-            print(f'   Recall@1={r1:.2f}%  @5={r5:.2f}%  @10={r10:.2f}%  @top1%={rtop1:.2f}%  mAP={mAP:.2f}%')
-            print(f'   🔗 {wandb.run.url}')
+                # 5. Rank distribution histogram
+                wandb.log({'test/rank_distribution': wandb.Histogram(
+                    rank_arr,
+                    num_bins=min(64, max(1, int(rank_arr.max())) if len(rank_arr) > 0 else 64)
+                )})
 
-        wandb.finish()
+                # 6. Per-query rank table
+                rank_tbl = wandb.Table(
+                    columns=['Query Idx', 'First-Hit Rank'],
+                    data=[[i, int(r)] for i, r in enumerate(rank_list)])
+                wandb.log({'test/rank_table': rank_tbl})
+
+                # 7. Per-query AP histogram
+                wandb.log({'test/per_query_AP_hist': wandb.Histogram(ap_arr, num_bins=50)})
+
+                # 8. Precision@K curve
+                prec_rows = []
+                for k in k_range:
+                    hits_k     = int(np.sum(rank_arr <= k))
+                    precision_k = hits_k / (k * valid_q) * 100
+                    prec_rows.append([k, precision_k])
+                prec_tbl = wandb.Table(columns=['K', 'Precision@K (%)'], data=prec_rows)
+                wandb.log({'test/Precision_curve': wandb.plot.line(
+                    prec_tbl, 'K', 'Precision@K (%)', title='Precision@K Curve')})
+
+                print(f'\n🟢 wandb metrics logged → {wandb.run.url}')
+
+            except Exception as e:
+                print(f'⚠️  wandb logging error: {e}')
+                import traceback; traceback.print_exc()
+
+            wandb.finish()
+
