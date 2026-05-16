@@ -64,6 +64,7 @@ parser.add_argument('--wandb_project', default='cross-view-geo-localization', ty
 parser.add_argument('--wandb_run_name', default='', type=str, help='wandb run name (defaults to model name)')
 
 opt = parser.parse_args()
+_cli_use_rgbd = opt.use_rgbd  # Save CLI value before config can override it
 ###load config###
 # load the training config
 config_path = os.path.join('./model',opt.name,'opts.yaml')
@@ -75,9 +76,9 @@ opt.use_NAS = config.get('use_NAS', False)
 opt.use_vgg16 = config.get('use_vgg16', False)
 opt.stride = config.get('stride', 2)
 opt.views = config.get('views', 2)
-# Load use_rgbd from config - this is critical for model/data compatibility
-opt.use_rgbd = config.get('use_rgbd', False)
-print(f"🔧 Config: use_rgbd={opt.use_rgbd}, views={opt.views}")
+# Load use_rgbd from config — but CLI --use_rgbd flag takes priority
+opt.use_rgbd = _cli_use_rgbd or config.get('use_rgbd', False)
+print(f"🔧 Config: use_rgbd={opt.use_rgbd} (CLI={_cli_use_rgbd}), views={opt.views}")
 
 if 'h' in config:
     opt.h = config['h']

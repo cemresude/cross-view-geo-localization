@@ -27,16 +27,9 @@ class CVUSADataset(Dataset):
             if ext in valid_extensions:
                 filepath = os.path.join(folder, filename)
                 self.images.append(filepath)
-                # Extract numeric ID from filename for consistent labeling
-                # e.g., "12345.jpg" -> 12345
-                basename = os.path.splitext(filename)[0]
-                # Handle filenames like "12345_sat.jpg" or just "12345.jpg"
-                numeric_part = basename.split('_')[0]
-                if numeric_part.isdigit():
-                    self.labels.append(int(numeric_part))
-                else:
-                    # Fallback: use hash for consistency
-                    self.labels.append(hash(basename) % 10000000)
+                # Use sequential index as label — in CVUSA the i-th query
+                # image is paired with the i-th gallery image (sorted order)
+                self.labels.append(len(self.images) - 1)
         
         print(f"📂 CVUSADataset: Loaded {len(self.images)} images from {folder}")
         if len(self.labels) > 0:
@@ -95,12 +88,9 @@ class CVUSARGBDDataset(Dataset):
                 if depth_path:
                     self.rgb_images.append(rgb_path)
                     self.depth_images.append(depth_path)
-                    # Extract numeric ID from filename for consistent labeling
-                    numeric_part = basename.split('_')[0]
-                    if numeric_part.isdigit():
-                        self.labels.append(int(numeric_part))
-                    else:
-                        self.labels.append(hash(basename) % 10000000)
+                    # Use sequential index as label — in CVUSA the i-th query
+                    # image is paired with the i-th gallery image (sorted order)
+                    self.labels.append(len(self.rgb_images) - 1)
         
         print(f"📂 CVUSARGBDDataset: Loaded {len(self.rgb_images)} RGBD pairs")
         print(f"   RGB folder: {rgb_folder}")

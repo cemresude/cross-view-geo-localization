@@ -98,8 +98,9 @@ def load_network(name, opt):
     opt.fp16 = config.get('fp16', False)
     opt.views = config['views']
 
-    # RGBD support
-    opt.use_rgbd = config.get('use_rgbd', False)
+    # RGBD support — preserve CLI flag if already True
+    if not getattr(opt, 'use_rgbd', False):
+        opt.use_rgbd = config.get('use_rgbd', False)
     
     # VGG16 support
     opt.use_vgg16 = config.get('use_vgg16', False)
