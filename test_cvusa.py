@@ -657,67 +657,104 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    # ── Inline metric computation (CPU-only, no OOM risk) ─────────────────
+    # ── Inline metric computation (vectorized, CPU-only) ────────────────
     import sys
-    print('\n📊 Computing retrieval metrics on CPU...', flush=True)
+    print('\n📊 Computing retrieval metrics on CPU (vectorized)...', flush=True)
+    eval_start = time.time()
     # Keep features on CPU to avoid second GPU allocation
     q_feat    = query_feature        # already on CPU (returned by extract_feature)
     g_feat    = gallery_feature      # already on CPU
     q_lbl     = np.array(query_label)
     g_lbl     = np.array(gallery_label)
+    n_query   = len(q_lbl)
     n_gallery = len(g_lbl)
-    print(f'  Query: {len(q_lbl)}  Gallery: {n_gallery}  Feat-dim: {q_feat.shape[1]}', flush=True)
+    print(f'  Query: {n_query}  Gallery: {n_gallery}  Feat-dim: {q_feat.shape[1]}', flush=True)
 
-    def _eval_query(qf, ql, gf, gl):
-        """Pure-numpy metric computation (CPU). Returns (ap, first_hit_rank_1indexed, cmc_array)."""
-        score     = (gf @ qf.unsqueeze(1)).squeeze(1).numpy()  # CPU torch.mm
-        index     = np.argsort(score)[::-1]
-        good_idx  = np.argwhere(gl == ql).flatten()
-        junk_idx  = np.argwhere(gl == -1).flatten()
-        # remove junk entries
-        mask      = np.in1d(index, junk_idx, invert=True)
-        index     = index[mask]
-        ngood     = len(good_idx)
-        if ngood == 0:
-            return 0.0, -1, None
-        mask2     = np.in1d(index, good_idx)
-        rows_good = np.argwhere(mask2).flatten()
-        if len(rows_good) == 0:
-            return 0.0, -1, None
-        n_clean   = len(index)
-        cmc       = np.zeros(n_clean, dtype=np.float32)
-        cmc[rows_good[0]:] = 1.0
-        first_rank = int(rows_good[0]) + 1  # 1-indexed
-        ap = 0.0
-        for i in range(ngood):
-            d_recall  = 1.0 / ngood
-            precision = (i + 1) / (rows_good[i] + 1)
-            old_prec  = i / rows_good[i] if rows_good[i] != 0 else 1.0
-            ap       += d_recall * (old_prec + precision) / 2
-        return ap, first_rank, cmc
+    # ── Step 1: Compute full similarity matrix in one shot ────────────
+    print('  Computing similarity matrix...', flush=True)
+    sys.stdout.flush()
+    # q_feat: [N_q, D], g_feat: [N_g, D] → scores: [N_q, N_g]
+    scores = torch.mm(q_feat, g_feat.t()).numpy()   # single fast matmul
+    print(f'  Similarity matrix computed: {scores.shape}', flush=True)
 
+    # ── Step 2: Sort once (descending) ────────────────────────────────
+    print('  Sorting similarities...', flush=True)
+    sys.stdout.flush()
+    sorted_indices = np.argsort(-scores, axis=1)     # [N_q, N_g] descending
+    print('  Sorting done.', flush=True)
+
+    # ── Step 3: Evaluate per query (fast — no more matmul inside loop) ─
     CMC_accum = np.zeros(n_gallery, dtype=np.float64)
     ap_list   = []
     rank_list = []
     valid_q   = 0
+    interrupted = False
 
-    for i in range(len(q_lbl)):
-        ap_tmp, rank_tmp, cmc_tmp = _eval_query(q_feat[i], q_lbl[i], g_feat, g_lbl)
-        if cmc_tmp is None: continue
+    junk_mask_gl = (g_lbl == -1)
 
-        if (i + 1) % 100 == 0 or i == 0:
-            print(f'  Query {i+1}/{len(q_lbl)} evaluated...', flush=True)
-            sys.stdout.flush()
+    try:
+        for i in range(n_query):
+            ql = q_lbl[i]
+            index = sorted_indices[i]
 
-        valid_q += 1
-        ap_list.append(ap_tmp * 100)
-        rank_list.append(rank_tmp)
-        n_c = len(cmc_tmp)
-        if n_c >= n_gallery:
-            CMC_accum += cmc_tmp[:n_gallery]
-        else:
-            CMC_accum[:n_c] += cmc_tmp
-            CMC_accum[n_c:] += cmc_tmp[-1]
+            # Remove junk entries
+            if junk_mask_gl.any():
+                keep = ~np.in1d(index, np.where(junk_mask_gl)[0])
+                index = index[keep]
+
+            good_idx = np.where(g_lbl == ql)[0]
+            ngood = len(good_idx)
+            if ngood == 0:
+                continue
+
+            match_mask = np.in1d(index, good_idx)
+            rows_good  = np.where(match_mask)[0]
+            if len(rows_good) == 0:
+                continue
+
+            # CMC
+            n_clean = len(index)
+            cmc = np.zeros(n_clean, dtype=np.float32)
+            cmc[rows_good[0]:] = 1.0
+            first_rank = int(rows_good[0]) + 1  # 1-indexed
+
+            # AP (trapezoidal)
+            ap = 0.0
+            for j in range(ngood):
+                d_recall  = 1.0 / ngood
+                precision = (j + 1) / (rows_good[j] + 1)
+                old_prec  = j / rows_good[j] if rows_good[j] != 0 else 1.0
+                ap       += d_recall * (old_prec + precision) / 2
+
+            valid_q += 1
+            ap_list.append(ap * 100)
+            rank_list.append(first_rank)
+            if n_clean >= n_gallery:
+                CMC_accum += cmc[:n_gallery]
+            else:
+                CMC_accum[:n_clean] += cmc
+                CMC_accum[n_clean:] += cmc[-1]
+
+            # Progress logging
+            if (i + 1) % 500 == 0 or i == 0 or (i + 1) == n_query:
+                elapsed = time.time() - eval_start
+                eta = elapsed / (i + 1) * (n_query - i - 1) if i > 0 else 0
+                print(f'  Query {i+1}/{n_query}  valid={valid_q}  '
+                      f'elapsed={elapsed:.0f}s  ETA={eta:.0f}s', flush=True)
+                sys.stdout.flush()
+                # Log intermediate progress to wandb
+                if use_wandb and valid_q > 0:
+                    partial_cmc = CMC_accum / valid_q
+                    wandb.log({
+                        'eval/progress_pct': round((i + 1) / n_query * 100, 1),
+                        'eval/valid_queries': valid_q,
+                        'eval/partial_Recall@1': float(partial_cmc[0]) * 100,
+                        'eval/partial_mAP': float(np.mean(ap_list)),
+                    })
+
+    except KeyboardInterrupt:
+        print(f'\n⚠️  Interrupted at query {i+1}/{n_query}. Reporting partial results...', flush=True)
+        interrupted = True
 
     print(f'\n  Done. Valid: {valid_q}/{len(q_lbl)}', flush=True)
     sys.stdout.flush()
