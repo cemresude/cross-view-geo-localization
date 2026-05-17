@@ -199,7 +199,7 @@ if opt.multi:
     # For University1652 dataset
     image_datasets = {x: datasets.ImageFolder( os.path.join(data_dir,x) ,data_transforms) for x in ['gallery','query','multi-query']}
     dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=False, num_workers=16) for x in ['gallery','query','multi-query']}
+                                             shuffle=False, num_workers=2) for x in ['gallery','query','multi-query']}
 else:
     # For CVUSA/University1652 dataset
     query_folder = os.path.join(data_dir, opt.query_folder)
@@ -382,8 +382,8 @@ else:
     
     image_datasets = {opt.query_folder: query_dataset, opt.gallery_folder: gallery_dataset}
     dataloaders = {
-        opt.query_folder: torch.utils.data.DataLoader(query_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16),
-        opt.gallery_folder: torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=16)
+        opt.query_folder: torch.utils.data.DataLoader(query_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=2),
+        opt.gallery_folder: torch.utils.data.DataLoader(gallery_dataset, batch_size=opt.batchsize, shuffle=False, num_workers=2)
     }
 
 # Set query and gallery names
