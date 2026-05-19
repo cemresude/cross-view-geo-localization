@@ -65,6 +65,9 @@ parser.add_argument('--depth_dir', default=None, type=str, help='separate depth 
 # LPN (use with --pool lpn)
 parser.add_argument('--lpn_blocks', default=4, type=int, help='number of LPN blocks (must be perfect square for square mode)')
 parser.add_argument('--lpn_mode', default='square', type=str, help='LPN split mode: square or horizontal')
+# Super Resolution (use with --use_rgbd)
+parser.add_argument('--use_sr', action='store_true', help='prepend SR module before backbone (only for RGBD satellite branch)')
+parser.add_argument('--sr_lightweight', action='store_true', default=True, help='use lightweight SR (32 feat) instead of full SR (64 feat)')
 #optimizer
 parser.add_argument('--warm_epoch', default=0, type=int, help='the first K epoch that needs warm up')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
@@ -578,9 +581,13 @@ if opt.pool == 'lpn':
 
 if opt.views == 2:
     if opt.use_rgbd:
-        print("🌈 Initializing RGBD two-view model")
-        model = two_view_net_rgbd(len(class_names), droprate=opt.droprate, stride=opt.stride,
-                                  pool=opt.pool, share_weight=opt.share, **lpn_kwargs)
+        print("🌈 Initializing RGBD two-view model" + (" + SR" if opt.use_sr else ""))
+        model = two_view_net_rgbd(
+            len(class_names), droprate=opt.droprate, stride=opt.stride,
+            pool=opt.pool, share_weight=opt.share,
+            use_sr=opt.use_sr, sr_lightweight=opt.sr_lightweight,
+            **lpn_kwargs
+        )
     else:
         model = two_view_net(len(class_names), droprate=opt.droprate, stride=opt.stride, pool=opt.pool,
                              share_weight=opt.share, circle=return_feature, VGG16=opt.use_vgg16, **lpn_kwargs)

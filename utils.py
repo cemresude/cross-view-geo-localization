@@ -109,6 +109,10 @@ def load_network(name, opt):
     opt.lpn_blocks = config.get('lpn_blocks', 4)
     opt.lpn_mode = config.get('lpn_mode', 'square')
 
+    # SR support
+    opt.use_sr = config.get('use_sr', False)
+    opt.sr_lightweight = config.get('sr_lightweight', True)
+
     # Build LPN kwargs
     lpn_kwargs = {}
     if opt.pool == 'lpn':
@@ -119,7 +123,12 @@ def load_network(name, opt):
     if opt.use_rgbd and opt.views == 2:
         # RGBD two-view model
         print("🌈 Loading RGBD two-view model")
-        model = two_view_net_rgbd(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, **lpn_kwargs)
+        model = two_view_net_rgbd(
+            opt.nclasses, opt.droprate, stride=opt.stride,
+            pool=opt.pool, share_weight=opt.share,
+            use_sr=opt.use_sr, sr_lightweight=opt.sr_lightweight,
+            **lpn_kwargs
+        )
     elif opt.views == 2:
         # Standard RGB two-view model
         model = two_view_net(opt.nclasses, opt.droprate, stride=opt.stride, pool=opt.pool, share_weight=opt.share, VGG16=opt.use_vgg16, **lpn_kwargs)

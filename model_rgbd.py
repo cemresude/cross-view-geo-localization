@@ -14,6 +14,8 @@ from torchvision import models
 
 # Import LPN classes from model.py (no duplication)
 from model import LPN, LPNBlock
+# Import SR module
+from model_sr import build_sr_module
 
 ######################################################################
 # GeM Pooling Layer (Generalized Mean Pooling)
@@ -70,29 +72,38 @@ def convert_conv1_to_4channel(model):
 # Load model structure - as a proper nn.Module class
 class ft_net_rgbd(nn.Module):
     """
-    ResNet50 with 4-channel (RGBD) input configuration
-    Structured like ft_net with .model and .pool attributes
-    Supports pool='lpn' with kwargs: lpn_blocks, lpn_mode, lpn_pool
+    ResNet50 with 4-channel (RGBD) input configuration.
+    Supports pool='lpn' with kwargs: lpn_blocks, lpn_mode, lpn_pool.
+    Supports use_sr=True to prepend a lightweight SR preprocessing module.
     """
-    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', **kwargs):
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg',
+                 use_sr=False, sr_lightweight=True, **kwargs):
         super(ft_net_rgbd, self).__init__()
         model_ft = models.resnet50(pretrained=True)
-        
+
+        # ── Optional Super Resolution pre-processing ───────────────────
+        self.use_sr = use_sr
+        if use_sr:
+            self.sr = build_sr_module(in_channels=4, lightweight=sr_lightweight)
+            print(f'🔬 SR module enabled (lightweight={sr_lightweight})')
+        else:
+            self.sr = None
+
         # Convert first conv layer to 4 channels
         model_ft.conv1 = convert_conv1_to_4channel(model_ft)
-        
+
         # Stride fix
         if stride == 1:
             model_ft.layer4[0].downsample[0].stride = (1,1)
             model_ft.layer4[0].conv2.stride = (1,1)
-        
+
         # Remove original avgpool and fc
         model_ft.avgpool = nn.Sequential()
         model_ft.fc = nn.Sequential()
-        
+
         self.model = model_ft
         self.pool = pool
-        
+
         # Pooling layers
         if pool == 'lpn':
             lpn_blocks = kwargs.get('lpn_blocks', 4)
@@ -106,6 +117,10 @@ class ft_net_rgbd(nn.Module):
                 self.gem = GeM(dim=2048)
 
     def forward(self, x):
+        # ── SR pre-processing (only on satellite RGBD branch) ──────────
+        if self.use_sr and self.sr is not None:
+            x = self.sr(x)   # [B,4,H,W] → [B,4,H,W] sharpened
+
         x = self.model.conv1(x)
         x = self.model.bn1(x)
         x = self.model.relu(x)
@@ -114,7 +129,7 @@ class ft_net_rgbd(nn.Module):
         x = self.model.layer2(x)
         x = self.model.layer3(x)
         x = self.model.layer4(x)
-        
+
         # Pooling
         if self.pool == 'avg+max':
             x1 = self.avgpool(x)
@@ -129,7 +144,7 @@ class ft_net_rgbd(nn.Module):
         elif self.pool == 'lpn':
             x = self.lpn(x)
             return x
-        
+
         x = x.view(x.size(0), -1)
         return x
 
@@ -192,20 +207,27 @@ class ClassBlock(nn.Module):
 
 # Two-view network with RGBD
 class two_view_net_rgbd(nn.Module):
-    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg', share_weight=False, VGG16=False, **kwargs):
+    def __init__(self, class_num, droprate=0.5, stride=2, pool='avg',
+                 share_weight=False, VGG16=False, use_sr=False,
+                 sr_lightweight=True, **kwargs):
         super(two_view_net_rgbd, self).__init__()
-        
-        # Satellite: RGBD (4 channels)
-        self.model_1 = ft_net_rgbd(class_num, droprate=droprate, stride=stride, pool=pool, **kwargs)
-        
-        # Drone: standard 3-channel RGB input
+
+        # Satellite: RGBD (4 channels) — SR applied here only
+        self.model_1 = ft_net_rgbd(
+            class_num, droprate=droprate, stride=stride, pool=pool,
+            use_sr=use_sr, sr_lightweight=sr_lightweight, **kwargs
+        )
+
+        # Drone/Streetview: standard 3-channel RGB input (no SR needed)
         if VGG16:
             from model import ft_net_VGG16
-            self.model_2 = ft_net_VGG16(class_num, droprate=droprate, stride=stride, pool=pool)
+            self.model_2 = ft_net_VGG16(class_num, droprate=droprate,
+                                         stride=stride, pool=pool)
         else:
             from model import ft_net
-            self.model_2 = ft_net(class_num, droprate=droprate, stride=stride, pool=pool, **kwargs)
-        
+            self.model_2 = ft_net(class_num, droprate=droprate,
+                                  stride=stride, pool=pool, **kwargs)
+
         # Compute classifier input dimension
         if pool == 'lpn':
             lpn_blocks = kwargs.get('lpn_blocks', 4)
@@ -217,10 +239,8 @@ class two_view_net_rgbd(nn.Module):
 
         # Shared classifier
         self.classifier = ClassBlock(feat_dim, class_num, droprate)
-        
+
         self.share_weight = share_weight
-        # Note: share_weight is not used here since satellite (4ch) and drone (3ch) 
-        # have different input dimensions and cannot share the first conv layer
 
     def forward(self, x1, x2):
         """
